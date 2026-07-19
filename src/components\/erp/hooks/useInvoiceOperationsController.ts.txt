@@ -1,0 +1,46 @@
+import React from 'react';
+import { Customer, Invoice, Product, TeamMember, Transaction } from '../../../types';
+import { Language } from '../../../utils/translations';
+
+interface Args {
+  invoices: Invoice[]; products: Product[]; transactions: Transaction[]; language: Language; currentUser: TeamMember;
+  setProducts: React.Dispatch<React.SetStateAction<Product[]>>; setCustomers: React.Dispatch<React.SetStateAction<Customer[]>>;
+  setTransactions: React.Dispatch<React.SetStateAction<Transaction[]>>; setInvoices: React.Dispatch<React.SetStateAction<Invoice[]>>;
+  setEditingInvoice: React.Dispatch<React.SetStateAction<Invoice | null>>; showToast: (message: string, type?: 'success' | 'error') => void;
+}
+export function useInvoiceOperationsController(args: Args) {
+  const handleSaveEditedInvoice = (updated: Invoice) => {
+    const original = args.invoices.find(i => i.id === updated.id); if (!original) return;
+    const stockSufficient = updated.items.every(item => {
+      if (item.type !== 'product' || !item.productId) return true;
+      const product = args.products.find(p => p.id === item.productId);
+      const originalItem = original.items.find(it => it.type === 'product' && it.productId === item.productId);
+      return (product?.quantity || 0) + (originalItem?.quantity || 0) >= item.quantity;
+    });
+    if (!stockSufficient) return args.showToast(args.language === 'ar' ? 'خطأ: الكميات المدخلة تتجاوز المتوفر حالياً بالمخزن!' : 'Error: Requested quantities exceed current warehouse stocks!', 'error');
+    args.setProducts(prev => prev.map(product => {
+      const oldItem = original.items.find(it => it.type === 'product' && it.productId === product.id);
+      const newItem = updated.items.find(it => it.type === 'product' && it.productId === product.id);
+      return { ...product, quantity: Math.max(0, product.quantity + (oldItem?.quantity || 0) - (newItem?.quantity || 0)) };
+    }));
+    args.setCustomers(prev => prev.map(customer => {
+      let balance = customer.balance;
+      if (original.paymentMethod === 'DEBT' && original.customerId === customer.id) balance = Math.max(0, balance - original.total);
+      if (updated.paymentMethod === 'DEBT' && updated.customerId === customer.id) balance += updated.total;
+      return { ...customer, balance };
+    }));
+    const remaining = args.transactions.filter(t => !t.notes?.includes(`#${updated.id}`));
+    let index = 1; const timestamp = Date.now();
+    const replacement: Transaction[] = updated.items.map(item => ({
+      id: `tx_sale_${timestamp}_${index++}`, productId: item.type === 'product' ? item.productId : undefined,
+      serviceId: item.type === 'service' ? item.serviceId : undefined, type: 'OUT', quantity: item.quantity, unitPrice: item.unitPrice,
+      date: updated.date, notes: `${item.type === 'product' ? (args.language === 'ar' ? 'مبيعات فاتورة POS' : 'POS Checkout Sale') : (args.language === 'ar' ? 'رسوم خدمات مهنية' : 'Professional Service Charge')} #${updated.id}`,
+      customerId: updated.customerId || undefined, warehouseId: item.type === 'product' ? 'wh_1' : undefined, cashierId: args.currentUser.id
+    }));
+    args.setTransactions([...replacement, ...remaining]);
+    args.setInvoices(prev => prev.map(inv => inv.id === updated.id ? updated : inv));
+    args.setEditingInvoice(null);
+    args.showToast(args.language === 'ar' ? 'تم تعديل الفاتورة وحفظ التعديلات بنجاح!' : 'Invoice edited and saved successfully!', 'success');
+  };
+  return { handleSaveEditedInvoice };
+}

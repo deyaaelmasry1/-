@@ -1,0 +1,77 @@
+import { useEffect, useRef } from 'react';
+import type { Product } from '../../../types';
+import type { Language } from '../../../utils/translations';
+import type { FeedbackBeep } from '../utils/audioFeedback';
+
+interface BarcodeScannerWedgeOptions {
+  enabled: boolean;
+  products: Product[];
+  language: Language;
+  onProductScanned: (product: Product) => void;
+  showToast: (message: string, type?: 'success' | 'error') => void;
+  playBeep: (type?: FeedbackBeep) => void;
+  maxKeyDelayMs?: number;
+  minCodeLength?: number;
+}
+
+export function useBarcodeScannerWedge({
+  enabled,
+  products,
+  language,
+  onProductScanned,
+  showToast,
+  playBeep,
+  maxKeyDelayMs = 40,
+  minCodeLength = 3,
+}: BarcodeScannerWedgeOptions): void {
+  const latestRef = useRef({ products, language, onProductScanned, showToast, playBeep });
+
+  useEffect(() => {
+    latestRef.current = { products, language, onProductScanned, showToast, playBeep };
+  }, [products, language, onProductScanned, showToast, playBeep]);
+
+  useEffect(() => {
+    if (!enabled) return;
+
+    let buffer = '';
+    let lastKeyTime = 0;
+
+    const consume = (event: KeyboardEvent): void => {
+      const code = buffer.trim();
+      buffer = '';
+      if (code.length < minCodeLength) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      const { products: currentProducts, language: currentLanguage, onProductScanned: scan, showToast: toast, playBeep: beep } = latestRef.current;
+      const product = currentProducts.find(item => item.code === code || item.id === code);
+
+      if (product) {
+        scan(product);
+        beep('success');
+        toast(currentLanguage === 'ar' ? `[ماسح خارجي] تمت إضافة الصنف: ${product.name}` : `[Hardware Scan] Added item: ${product.name}`);
+      } else {
+        beep('error');
+        toast(currentLanguage === 'ar' ? `الباركود [${code}] غير مسجل بالنظام` : `Scanned code [${code}] not recognized`, 'error');
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      const now = Date.now();
+      const rapid = buffer.length === 0 || now - lastKeyTime < maxKeyDelayMs;
+      lastKeyTime = now;
+
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        if (rapid) consume(event);
+        else buffer = '';
+        return;
+      }
+
+      if (event.key.length !== 1) return;
+      buffer = rapid ? buffer + event.key : event.key;
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [enabled, maxKeyDelayMs, minCodeLength]);
+}

@@ -1,0 +1,58 @@
+import { useMemo, useState } from 'react';
+import type { Product, Transaction } from '../../../types';
+
+export function useReportsController(transactions: Transaction[], products: Product[]) {
+  const [reportType, setReportType] = useState<'all' | 'sales' | 'purchases' | 'customers' | 'suppliers' | 'inventory' | 'movements'>('all');
+  const [reportDateRangePreset, setReportDateRangePreset] = useState<'all' | 'today' | '7days' | 'thismonth' | 'custom'>('all');
+  const [reportStartDate, setReportStartDate] = useState('');
+  const [reportEndDate, setReportEndDate] = useState('');
+  const [reportProductId, setReportProductId] = useState('all');
+  const [reportCustomerId, setReportCustomerId] = useState('all');
+  const [reportSupplierId, setReportSupplierId] = useState('all');
+  const [reportWarehouseId, setReportWarehouseId] = useState('all');
+
+  const filteredReportData = useMemo(() => {
+    let txs = [...transactions];
+    const now = new Date();
+    if (reportDateRangePreset === 'today') {
+      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      txs = txs.filter(t => new Date(t.date) >= startOfToday);
+    } else if (reportDateRangePreset === '7days') {
+      const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      txs = txs.filter(t => new Date(t.date) >= sevenDaysAgo);
+    } else if (reportDateRangePreset === 'thismonth') {
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      txs = txs.filter(t => new Date(t.date) >= startOfMonth);
+    } else if (reportDateRangePreset === 'custom') {
+      if (reportStartDate) txs = txs.filter(t => new Date(t.date) >= new Date(reportStartDate));
+      if (reportEndDate) {
+        const endLimit = new Date(reportEndDate);
+        endLimit.setHours(23, 59, 59, 999);
+        txs = txs.filter(t => new Date(t.date) <= endLimit);
+      }
+    }
+    if (reportType === 'sales') txs = txs.filter(t => t.type === 'OUT');
+    else if (reportType === 'purchases') txs = txs.filter(t => t.type === 'IN');
+    if (reportProductId !== 'all') txs = txs.filter(t => t.productId === reportProductId);
+    if (reportCustomerId !== 'all') txs = txs.filter(t => t.customerId === reportCustomerId);
+    if (reportSupplierId !== 'all') txs = txs.filter(t => t.supplierId === reportSupplierId);
+    if (reportWarehouseId !== 'all') txs = txs.filter(t => t.warehouseId === reportWarehouseId);
+    return txs;
+  }, [transactions, reportType, reportDateRangePreset, reportStartDate, reportEndDate, reportProductId, reportCustomerId, reportSupplierId, reportWarehouseId]);
+
+  const reportMetrics = useMemo(() => {
+    let salesTotal = 0, purchasesTotal = 0, salesCount = 0, purchasesCount = 0, totalProfit = 0;
+    filteredReportData.forEach(tx => {
+      const itemVal = tx.quantity * tx.unitPrice;
+      const product = products.find(p => p.id === tx.productId);
+      const costPrice = product ? product.costPrice : tx.unitPrice * 0.7;
+      if (tx.type === 'OUT') { salesTotal += itemVal; salesCount++; totalProfit += tx.quantity * (tx.unitPrice - costPrice); }
+      else if (tx.type === 'IN') { purchasesTotal += itemVal; purchasesCount++; }
+      else if (tx.type === 'SALE_RETURN') { salesTotal -= itemVal; totalProfit -= tx.quantity * (tx.unitPrice - costPrice); }
+      else if (tx.type === 'PURCHASE_RETURN') purchasesTotal -= itemVal;
+    });
+    return { salesTotal, purchasesTotal, salesCount, purchasesCount, totalProfit, netCashflow: salesTotal - purchasesTotal, txCount: filteredReportData.length };
+  }, [filteredReportData, products]);
+
+  return { reportType, setReportType, reportDateRangePreset, setReportDateRangePreset, reportStartDate, setReportStartDate, reportEndDate, setReportEndDate, reportProductId, setReportProductId, reportCustomerId, setReportCustomerId, reportSupplierId, setReportSupplierId, reportWarehouseId, setReportWarehouseId, filteredReportData, reportMetrics };
+}

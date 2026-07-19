@@ -1,0 +1,716 @@
+import { useEffect, useState } from 'react';
+import type { Dispatch, FormEvent, SetStateAction } from 'react';
+import type { Customer, Supplier, FinancialVoucher, Transaction, Invoice, TeamMember, Product } from '../../../types';
+import type { Language } from '../../../utils/translations';
+
+type Props = {
+  customers: Customer[];
+  suppliers: Supplier[];
+  vouchers: FinancialVoucher[];
+  transactions: Transaction[];
+  products: Product[];
+  invoices: Invoice[];
+  language: Language;
+  currentUser?: TeamMember;
+  profileOpenRequest?: { type: 'customer' | 'supplier'; id: string; token: number } | null;
+  companyName?: string;
+  companyAddress?: string;
+  companyPhone?: string;
+  setCustomers: Dispatch<SetStateAction<Customer[]>>;
+  setSuppliers: Dispatch<SetStateAction<Supplier[]>>;
+  setVouchers: Dispatch<SetStateAction<FinancialVoucher[]>>;
+  setPreviousSubTab: Dispatch<SetStateAction<string>>;
+  showToast: (msg: string, type?: 'success' | 'error') => void;
+  playBeep: (type?: any) => void;
+};
+
+export function usePartyFinancialController({
+  customers, suppliers, vouchers, transactions, products, invoices, language, currentUser,
+  profileOpenRequest, companyName, companyAddress, companyPhone,
+  setCustomers, setSuppliers, setVouchers, setPreviousSubTab, showToast, playBeep,
+}: Props) {
+  const [customerSubSubTab, setCustomerSubSubTab] = useState<'customers' | 'suppliers'>('customers');
+  const [viewingCustomerProfile, setViewingCustomerProfile] = useState<Customer | null>(null);
+  const [viewingSupplierProfile, setViewingSupplierProfile] = useState<Supplier | null>(null);
+  const [isEditingProfile, setIsEditingProfile] = useState<boolean>(false);
+  
+  // Profile editing fields
+  const [profileEditName, setProfileEditName] = useState<string>('');
+  const [profileEditPhone, setProfileEditPhone] = useState<string>('');
+  const [profileEditEmail, setProfileEditEmail] = useState<string>('');
+  const [profileEditAddress, setProfileEditAddress] = useState<string>('');
+  const [profileEditCompany, setProfileEditCompany] = useState<string>(''); // suppliers only
+
+  useEffect(() => {
+    if (!profileOpenRequest) return;
+    setIsEditingProfile(false);
+    setProfileActiveTab('info');
+    setPreviousSubTab('customers');
+    if (profileOpenRequest.type === 'customer') {
+      const customer = customers.find(c => String(c.id) === String(profileOpenRequest.id));
+      if (customer) {
+        setViewingSupplierProfile(null);
+        setViewingCustomerProfile(customer);
+      }
+    } else {
+      const supplier = suppliers.find(s => String(s.id) === String(profileOpenRequest.id));
+      if (supplier) {
+        setViewingCustomerProfile(null);
+        setViewingSupplierProfile(supplier);
+      }
+    }
+  }, [profileOpenRequest?.token]);
+
+  // Profile manual voucher creation fields
+  const [profileVoucherType, setProfileVoucherType] = useState<'RECEIPT' | 'PAYMENT'>('RECEIPT');
+  const [profileVoucherAmount, setProfileVoucherAmount] = useState<string>('');
+  const [profileVoucherMethod, setProfileVoucherMethod] = useState<'CASH' | 'BANK' | 'CHECK' | 'SETTLEMENT'>('CASH');
+  const [profileVoucherNotes, setProfileVoucherNotes] = useState<string>('');
+  const [profileVoucherDate, setProfileVoucherDate] = useState<string>('');
+
+  const [profileActiveTab, setProfileActiveTab] = useState<'info' | 'ops' | 'vouchers' | 'add_voucher'>('info');
+
+  const handleCreateVoucherFromProfile = (e: FormEvent, partyType: 'CUSTOMER' | 'SUPPLIER', partyId: string) => {
+    e.preventDefault();
+    const amountNum = parseFloat(profileVoucherAmount);
+    if (!amountNum || amountNum <= 0) {
+      showToast(language === 'ar' ? 'يرجى إدخال مبلغ صحيح أكبر من الصفر!' : 'Please enter a valid amount greater than zero!', 'error');
+      return;
+    }
+
+    const nextId = `vouch_${Date.now()}`;
+    const prefix = profileVoucherType === 'RECEIPT' ? 'RCV' : 'PAY';
+    const randomNum = Math.floor(1000 + Math.random() * 9000);
+    const voucherNumber = `${prefix}-${randomNum}`;
+
+    const newVoucher: FinancialVoucher = {
+      id: nextId,
+      voucherNumber,
+      type: profileVoucherType,
+      partyType,
+      partyId,
+      amount: amountNum,
+      date: profileVoucherDate || new Date().toISOString().split('T')[0],
+      paymentMethod: profileVoucherMethod,
+      notes: profileVoucherNotes.trim() || undefined,
+      createdBy: currentUser?.name || undefined
+    };
+
+    // 1. Update vouchers list
+    setVouchers(prev => [newVoucher, ...prev]);
+
+    // 2. Adjust Balance
+    if (partyType === 'CUSTOMER') {
+      setCustomers(prev => prev.map(cust => {
+        if (cust.id === partyId) {
+          const multiplier = profileVoucherType === 'RECEIPT' ? -1 : 1;
+          const updatedBalance = cust.balance + (multiplier * amountNum);
+          
+          // Also update currently viewed profile state
+          setViewingCustomerProfile(curr => curr ? { ...curr, balance: updatedBalance } : null);
+          
+          return { ...cust, balance: updatedBalance };
+        }
+        return cust;
+      }));
+
+      // Settlement linked supplier
+      if (profileVoucherMethod === 'SETTLEMENT') {
+        const activeCust = customers.find(c => c.id === partyId);
+        const custName = activeCust?.name || '';
+        const custPhone = activeCust?.phone || '';
+        if (custName) {
+          setSuppliers(prev => prev.map(sup => {
+            const nameMatch = sup.name.trim().toLowerCase() === custName.trim().toLowerCase();
+            const phoneMatch = custPhone && sup.phone && sup.phone.trim() === custPhone.trim();
+            if (nameMatch || phoneMatch) {
+              const multiplier = profileVoucherType === 'RECEIPT' ? 1 : -1;
+              const updatedBalance = (sup.balance || 0) + (multiplier * amountNum);
+              return { ...sup, balance: updatedBalance };
+            }
+            return sup;
+          }));
+        }
+      }
+    } else if (partyType === 'SUPPLIER') {
+      setSuppliers(prev => prev.map(sup => {
+        if (sup.id === partyId) {
+          const multiplier = profileVoucherType === 'PAYMENT' ? 1 : -1;
+          const updatedBalance = (sup.balance || 0) + (multiplier * amountNum);
+          
+          // Also update currently viewed profile state
+          setViewingSupplierProfile(curr => curr ? { ...curr, balance: updatedBalance } : null);
+          
+          return { ...sup, balance: updatedBalance };
+        }
+        return sup;
+      }));
+
+      // Settlement linked customer
+      if (profileVoucherMethod === 'SETTLEMENT') {
+        const activeSup = suppliers.find(s => s.id === partyId);
+        const supName = activeSup?.name || '';
+        const supPhone = activeSup?.phone || '';
+        if (supName) {
+          setCustomers(prev => prev.map(cust => {
+            const nameMatch = cust.name.trim().toLowerCase() === supName.trim().toLowerCase();
+            const phoneMatch = supPhone && cust.phone && cust.phone.trim() === supPhone.trim();
+            if (nameMatch || phoneMatch) {
+              const multiplier = profileVoucherType === 'PAYMENT' ? -1 : 1;
+              const updatedBalance = cust.balance + (multiplier * amountNum);
+              return { ...cust, balance: updatedBalance };
+            }
+            return cust;
+          }));
+        }
+      }
+    }
+
+    // Reset fields
+    setProfileVoucherAmount('');
+    setProfileVoucherNotes('');
+    setProfileVoucherDate('');
+    
+    showToast(
+      language === 'ar' 
+        ? `تم تسجيل السند ${voucherNumber} بنجاح وتحديث الحساب ماليّاً!` 
+        : `Voucher ${voucherNumber} registered successfully and ledger updated!`,
+      'success'
+    );
+    playBeep('success');
+  };
+
+  const handleSaveProfileDetails = (partyType: 'CUSTOMER' | 'SUPPLIER', partyId: string) => {
+    if (!profileEditName.trim()) {
+      showToast(language === 'ar' ? 'الاسم مطلوب!' : 'Name is required!', 'error');
+      return;
+    }
+
+    if (partyType === 'CUSTOMER') {
+      setCustomers(prev => prev.map(cust => {
+        if (cust.id === partyId) {
+          const updated = {
+            ...cust,
+            name: profileEditName.trim(),
+            phone: profileEditPhone.trim() || undefined,
+            email: profileEditEmail.trim() || undefined,
+            address: profileEditAddress.trim() || undefined
+          };
+          setViewingCustomerProfile(updated);
+          return updated;
+        }
+        return cust;
+      }));
+    } else {
+      setSuppliers(prev => prev.map(sup => {
+        if (sup.id === partyId) {
+          const updated = {
+            ...sup,
+            name: profileEditName.trim(),
+            phone: profileEditPhone.trim() || undefined,
+            email: profileEditEmail.trim() || undefined,
+            address: profileEditAddress.trim() || undefined,
+            company: profileEditCompany.trim() || undefined
+          };
+          setViewingSupplierProfile(updated);
+          return updated;
+        }
+        return sup;
+      }));
+    }
+
+    setIsEditingProfile(false);
+    showToast(
+      language === 'ar' ? 'تم تحديث البيانات بنجاح!' : 'Details updated successfully!',
+      'success'
+    );
+    playBeep('success');
+  };
+
+  const handleDeleteVoucherFromProfile = (voucherId: string, partyType: 'CUSTOMER' | 'SUPPLIER', partyId: string) => {
+    const voucher = vouchers.find(v => v.id === voucherId);
+    if (!voucher) return;
+
+    if (!confirm(language === 'ar' ? 'هل أنت متأكد من حذف هذا السند؟ سيتم عكس تأثيره على الحساب المالي.' : 'Are you sure you want to delete this voucher? Its balance effect will be reversed.')) {
+      return;
+    }
+
+    const amountNum = voucher.amount;
+    if (partyType === 'CUSTOMER') {
+      setCustomers(prev => prev.map(cust => {
+        if (cust.id === partyId) {
+          const multiplier = voucher.type === 'RECEIPT' ? 1 : -1;
+          const updatedBalance = cust.balance + (multiplier * amountNum);
+          setViewingCustomerProfile(curr => curr ? { ...curr, balance: updatedBalance } : null);
+          return { ...cust, balance: updatedBalance };
+        }
+        return cust;
+      }));
+    } else if (partyType === 'SUPPLIER') {
+      setSuppliers(prev => prev.map(sup => {
+        if (sup.id === partyId) {
+          const multiplier = voucher.type === 'PAYMENT' ? -1 : 1;
+          const updatedBalance = (sup.balance || 0) + (multiplier * amountNum);
+          setViewingSupplierProfile(curr => curr ? { ...curr, balance: updatedBalance } : null);
+          return { ...sup, balance: updatedBalance };
+        }
+        return sup;
+      }));
+    }
+
+    setVouchers(prev => prev.filter(v => v.id !== voucherId));
+    showToast(
+      language === 'ar' ? 'تم حذف السند وإلغاء أثره المالي بنجاح!' : 'Voucher deleted and financial impact reversed!',
+      'success'
+    );
+    playBeep('success');
+  };
+
+  const handlePrintPartnerLedger = (partnerType: 'CUSTOMER' | 'SUPPLIER', partnerId: string) => {
+    const isAr = language === 'ar';
+    let pName = '';
+    let pPhone = '';
+    let pEmail = '';
+    let pAddress = '';
+    let pCompany = '';
+    let pBalance = 0;
+
+    if (partnerType === 'CUSTOMER') {
+      const cust = customers.find(c => c.id === partnerId);
+      if (!cust) return;
+      pName = cust.name;
+      pPhone = cust.phone || '';
+      pEmail = cust.email || '';
+      pAddress = cust.address || '';
+      pBalance = cust.balance;
+    } else {
+      const sup = suppliers.find(s => s.id === partnerId);
+      if (!sup) return;
+      pName = sup.name;
+      pPhone = sup.phone || '';
+      pEmail = sup.email || '';
+      pAddress = sup.address || '';
+      pCompany = sup.company || '';
+      pBalance = sup.balance || 0;
+    }
+
+    const partnerTxs = transactions.filter(t => 
+      partnerType === 'CUSTOMER' ? t.customerId === partnerId : t.supplierId === partnerId
+    );
+    const partnerVouchers = vouchers.filter(v => 
+      v.partyId === partnerId && v.partyType === partnerType
+    );
+    const partnerInvoices = partnerType === 'CUSTOMER' 
+      ? invoices.filter(inv => inv.customerId === partnerId) 
+      : [];
+
+    const title = isAr ? `كشف حساب - ${pName}` : `Statement of Account - ${pName}`;
+
+    const timelineItems: Array<{
+      date: string;
+      type: string;
+      ref: string;
+      details: string;
+      amount: number;
+      method?: string;
+    }> = [];
+
+    partnerTxs.forEach(tx => {
+      const prod = products.find(p => p.id === tx.productId);
+      timelineItems.push({
+        date: tx.date,
+        type: tx.type === 'IN' ? (isAr ? 'توريد شراء' : 'Purchase Restock') : tx.type === 'SALE_RETURN' ? (isAr ? 'مرتجع مبيعات' : 'Sales Return') : tx.type === 'PURCHASE_RETURN' ? (isAr ? 'مرتجع مشتريات' : 'Purchase Return') : (isAr ? 'مبيعات' : 'Sales'),
+        ref: `TX-${tx.id.substring(tx.id.length - 6).toUpperCase()}`,
+        details: prod ? `${prod.name} (${tx.quantity} pcs)` : `Generic Transaction (${tx.quantity} pcs)`,
+        amount: tx.quantity * tx.unitPrice,
+        method: tx.paymentMethod
+      });
+    });
+
+    partnerInvoices.forEach(inv => {
+      timelineItems.push({
+        date: inv.date,
+        type: isAr ? 'فاتورة مبيعات' : 'Sales Invoice',
+        ref: inv.invoiceNo || `INV-${inv.id.substring(inv.id.length - 6).toUpperCase()}`,
+        details: inv.items.map(i => `${i.name} (x${i.quantity})`).join(', '),
+        amount: inv.total,
+        method: inv.paymentMethod
+      });
+    });
+
+    partnerVouchers.forEach(v => {
+      timelineItems.push({
+        date: v.date,
+        type: v.type === 'RECEIPT' ? (isAr ? 'سند قبض' : 'Receipt Voucher') : (isAr ? 'سند صرف' : 'Payment Voucher'),
+        ref: v.voucherNumber,
+        details: v.notes || (isAr ? 'سند يدوي' : 'Manual Ledger Adjustment'),
+        amount: v.amount,
+        method: v.paymentMethod
+      });
+    });
+
+    timelineItems.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html dir="${isAr ? 'rtl' : 'ltr'}">
+      <head>
+        <meta charset="utf-8">
+        <title>${title}</title>
+        <style>
+          body {
+            font-family: ${isAr ? "'Cairo', 'Segoe UI', sans-serif" : "'Inter', 'Segoe UI', sans-serif"};
+            color: #1e293b;
+            background: #ffffff;
+            padding: 40px;
+            margin: 0;
+            font-size: 13px;
+            line-height: 1.5;
+          }
+          .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 20px;
+            margin-bottom: 20px;
+          }
+          .company-info h1 {
+            font-size: 20px;
+            font-weight: 800;
+            margin: 0 0 5px 0;
+            color: #0f172a;
+          }
+          .company-info p {
+            margin: 2px 0;
+            color: #64748b;
+          }
+          .title-badge {
+            background: #f1f5f9;
+            border: 1px solid #cbd5e1;
+            padding: 8px 15px;
+            border-radius: 8px;
+            font-weight: 800;
+            font-size: 14px;
+            color: #1e293b;
+            text-transform: uppercase;
+          }
+          .partner-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 25px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+          }
+          .info-group h4 {
+            margin: 0 0 5px 0;
+            color: #64748b;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+          }
+          .info-group p {
+            margin: 0;
+            font-weight: 700;
+            font-size: 14px;
+            color: #334155;
+          }
+          .balance-box {
+            background: #e0f2fe;
+            border: 1px solid #bae6fd;
+            padding: 15px;
+            border-radius: 12px;
+            margin-bottom: 25px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+          }
+          .balance-box.negative {
+            background: #fef2f2;
+            border: 1px solid #fee2e2;
+          }
+          .balance-title {
+            font-weight: 800;
+            color: #0369a1;
+          }
+          .balance-box.negative .balance-title {
+            color: #b91c1c;
+          }
+          .balance-val {
+            font-size: 20px;
+            font-weight: 900;
+            font-family: monospace;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+          }
+          th {
+            background: #f1f5f9;
+            color: #475569;
+            font-weight: 800;
+            text-transform: uppercase;
+            font-size: 10px;
+            padding: 10px 12px;
+            border-bottom: 1.5px solid #cbd5e1;
+            text-align: ${isAr ? 'right' : 'left'};
+          }
+          td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #e2e8f0;
+            color: #334155;
+          }
+          tr:hover {
+            background: #f8fafc;
+          }
+          .amount-col {
+            font-family: monospace;
+            font-weight: 700;
+          }
+          .footer {
+            margin-top: 50px;
+            text-align: center;
+            font-size: 11px;
+            color: #94a3b8;
+            border-top: 1px dashed #e2e8f0;
+            padding-top: 15px;
+          }
+          @media print {
+            body {
+              padding: 0;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="company-info">
+            <h1>${companyName || (isAr ? 'نظام موارد المؤسسة' : 'ERP Hub Management')}</h1>
+            ${companyAddress ? `<p>${companyAddress}</p>` : ''}
+            ${companyPhone ? `<p>${isAr ? 'هاتف: ' : 'Tel: '}${companyPhone}</p>` : ''}
+          </div>
+          <div class="title-badge">
+            ${isAr ? 'كشف حساب رسمي معتمد' : 'Official Statement of Account'}
+          </div>
+        </div>
+
+        <div class="partner-card">
+          <div class="info-group">
+            <h4>${isAr ? 'الطرف معني الحساب:' : 'Account Partner:'}</h4>
+            <p>${pName} ${pCompany ? `(${pCompany})` : ''}</p>
+          </div>
+          <div class="info-group">
+            <h4>${isAr ? 'رقم الاتصال:' : 'Contact Phone:'}</h4>
+            <p>${pPhone || '-'}</p>
+          </div>
+          <div class="info-group" style="grid-column: span 2;">
+            <h4>${isAr ? 'العنوان والبريد الإلكتروني:' : 'Address & Email:'}</h4>
+            <p>${[pAddress, pEmail].filter(Boolean).join(' | ') || '-'}</p>
+          </div>
+        </div>
+
+        <div class="balance-box ${pBalance >= 0 ? '' : 'negative'}">
+          <span class="balance-title">
+            ${isAr 
+              ? (partnerType === 'CUSTOMER' ? 'الرصيد المطلوب سداده (المديونية المستحقة):' : 'الرصيد المالي الحالي للمورد:') 
+              : 'Current Outstanding Ledger Balance:'}
+          </span>
+          <span class="balance-val">
+            $${Math.abs(pBalance).toFixed(2)} 
+            ${isAr 
+              ? (pBalance >= 0 ? 'مدين / مستحق' : 'دائن / له رصيد') 
+              : (pBalance >= 0 ? 'Debit (Owes us)' : 'Credit (We owe)')}
+          </span>
+        </div>
+
+        <h3>${isAr ? 'تفاصيل الحركة والقيود المالية بالتسلسل التاريخي' : 'Chronological Transaction & Payment History Ledger'}</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>${isAr ? 'التاريخ' : 'Date'}</th>
+              <th>${isAr ? 'نوع الحركة' : 'Operation Type'}</th>
+              <th>${isAr ? 'رقم السند/المرجع' : 'Reference/Doc No.'}</th>
+              <th>${isAr ? 'الوصف والتفاصيل' : 'Description / Narrative'}</th>
+              <th>${isAr ? 'طريقة السداد' : 'Payment Mode'}</th>
+              <th style="text-align: ${isAr ? 'left' : 'right'};">${isAr ? 'المبلغ المالي' : 'Amount'}</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${timelineItems.length === 0 ? `
+              <tr>
+                <td colspan="6" style="text-align: center; padding: 30px; color: #94a3b8; font-weight: bold;">
+                  ${isAr ? 'لا يوجد أي معاملات مسجلة في كشف الحساب' : 'No registered operations found in this ledger'}
+                </td>
+              </tr>
+            ` : timelineItems.map(item => `
+              <tr>
+                <td>${new Date(item.date).toLocaleDateString()}</td>
+                <td style="font-weight: 700;">${item.type}</td>
+                <td style="font-family: monospace; font-size: 11px;">${item.ref}</td>
+                <td>${item.details}</td>
+                <td><span style="font-weight: 800; font-size: 10px; background: #f1f5f9; padding: 2px 6px; border-radius: 4px;">${item.method || '-'}</span></td>
+                <td class="amount-col" style="text-align: ${isAr ? 'left' : 'right'};">$${item.amount.toFixed(2)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+
+        <div class="footer">
+          <p>${isAr ? 'كشف الحساب هذا مستخرج محاسبياً وتلقائياً من النظام وموثق قانونياً.' : 'This account ledger report is generated automatically by the systems accounting suite and is certified.'}</p>
+          <p>${new Date().toLocaleString()}</p>
+        </div>
+      </body>
+      </html>
+    `;
+
+    try {
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.width = '800px';
+      iframe.style.height = '1000px';
+      iframe.style.left = '-10000px';
+      iframe.style.top = '-10000px';
+      iframe.style.visibility = 'hidden';
+      document.body.appendChild(iframe);
+
+      const doc = iframe.contentDocument || iframe.contentWindow?.document;
+      if (!doc) throw new Error('Could not access print iframe');
+
+      doc.open();
+      doc.write(htmlContent);
+      doc.close();
+
+      setTimeout(() => {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+        setTimeout(() => {
+          document.body.removeChild(iframe);
+        }, 1000);
+      }, 500);
+    } catch (err) {
+      console.error(err);
+      showToast(isAr ? 'فشلت عملية الطباعة!' : 'Print statement failed!', 'error');
+    }
+  };
+
+  const handleSharePartnerLedger = (partnerType: 'CUSTOMER' | 'SUPPLIER', partnerId: string) => {
+    const isAr = language === 'ar';
+    let pName = '';
+    let pPhone = '';
+    let pBalance = 0;
+
+    if (partnerType === 'CUSTOMER') {
+      const cust = customers.find(c => c.id === partnerId);
+      if (!cust) return;
+      pName = cust.name;
+      pPhone = cust.phone || '';
+      pBalance = cust.balance;
+    } else {
+      const sup = suppliers.find(s => s.id === partnerId);
+      if (!sup) return;
+      pName = sup.name;
+      pPhone = sup.phone || '';
+      pBalance = sup.balance || 0;
+    }
+
+    const partnerVouchers = vouchers.filter(v => 
+      v.partyId === partnerId && v.partyType === partnerType
+    );
+
+    let text = '';
+    if (isAr) {
+      text = `📝 *كشف حساب مالي - ${pName}*
+`;
+      text += `━━━━━━━━━━━━━━━━━━━
+`;
+      text += `👤 *الاسم:* ${pName}
+`;
+      if (pPhone) text += `📞 *الهاتف:* ${pPhone}
+`;
+      text += `💵 *الرصيد الحالي:* $${Math.abs(pBalance).toFixed(2)} (${pBalance >= 0 ? 'مستحق عليه 🔴' : 'رصيد دائن له 🟢'})
+`;
+      text += `━━━━━━━━━━━━━━━━━━━
+`;
+      text += `🧾 *آخر السندات المالية والدفعات اليدوية:*
+`;
+      
+      const lastVouchers = partnerVouchers.slice(0, 5);
+      if (lastVouchers.length === 0) {
+        text += `• لا يوجد أي سندات مالية يدوية مسجلة بعد.
+`;
+      } else {
+        lastVouchers.forEach(v => {
+          text += `• [${v.date}] *${v.type === 'RECEIPT' ? 'سند قبض' : 'سند صرف'}* (${v.voucherNumber}) بمبلغ *$${v.amount.toFixed(2)}* - ${v.notes || 'دون ملاحظات'}
+`;
+        });
+      }
+      text += `━━━━━━━━━━━━━━━━━━━
+`;
+      text += `✨ تم تصدير التقرير من منصة: *${companyName || 'نظام موارد المؤسسة'}*`;
+    } else {
+      text = `📝 *Financial Ledger Statement - ${pName}*
+`;
+      text += `━━━━━━━━━━━━━━━━━━━
+`;
+      text += `👤 *Partner:* ${pName}
+`;
+      if (pPhone) text += `📞 *Phone:* ${pPhone}
+`;
+      text += `💵 *Current Balance:* $${Math.abs(pBalance).toFixed(2)} (${pBalance >= 0 ? 'Debit / Owes us 🔴' : 'Credit / We owe 🟢'})
+`;
+      text += `━━━━━━━━━━━━━━━━━━━
+`;
+      text += `🧾 *Recent Financial Vouchers:*
+`;
+      
+      const lastVouchers = partnerVouchers.slice(0, 5);
+      if (lastVouchers.length === 0) {
+        text += `• No manual vouchers registered yet.
+`;
+      } else {
+        lastVouchers.forEach(v => {
+          text += `• [${v.date}] *${v.type}* (${v.voucherNumber}) of *$${v.amount.toFixed(2)}* - ${v.notes || 'No notes'}
+`;
+        });
+      }
+      text += `━━━━━━━━━━━━━━━━━━━
+`;
+      text += `✨ Generated via: *${companyName || 'ERP Hub'}*`;
+    }
+
+    navigator.clipboard.writeText(text);
+    showToast(
+      isAr 
+        ? 'تم نسخ ملخص الحساب وجاهز للمشاركة عبر الواتساب أو الإيميل بنجاح!' 
+        : 'Statement summary copied to clipboard! Ready to share.',
+      'success'
+    );
+    playBeep('success');
+  };
+  return {
+    customerSubSubTab, setCustomerSubSubTab,
+    viewingCustomerProfile, setViewingCustomerProfile,
+    viewingSupplierProfile, setViewingSupplierProfile,
+    isEditingProfile, setIsEditingProfile,
+    profileEditName, setProfileEditName,
+    profileEditPhone, setProfileEditPhone,
+    profileEditEmail, setProfileEditEmail,
+    profileEditAddress, setProfileEditAddress,
+    profileEditCompany, setProfileEditCompany,
+    profileVoucherType, setProfileVoucherType,
+    profileVoucherAmount, setProfileVoucherAmount,
+    profileVoucherMethod, setProfileVoucherMethod,
+    profileVoucherNotes, setProfileVoucherNotes,
+    profileVoucherDate, setProfileVoucherDate,
+    profileActiveTab, setProfileActiveTab,
+    handleCreateVoucherFromProfile,
+    handleSaveProfileDetails,
+    handleDeleteVoucherFromProfile,
+    handlePrintPartnerLedger,
+    handleSharePartnerLedger,
+  };
+}

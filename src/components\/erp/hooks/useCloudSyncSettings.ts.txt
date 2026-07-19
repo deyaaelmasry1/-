@@ -1,0 +1,71 @@
+import { useEffect, useState } from 'react';
+import type { Dispatch, SetStateAction } from 'react';
+
+export interface UseCloudSyncSettingsOptions {
+  firebaseUrl?: string;
+  setFirebaseUrl?: Dispatch<SetStateAction<string>>;
+  teamId?: string;
+  setTeamId?: Dispatch<SetStateAction<string>>;
+  cloudSyncType?: 'default' | 'custom';
+  setCloudSyncType?: Dispatch<SetStateAction<'default' | 'custom'>>;
+  isAutoSyncEnabled?: boolean;
+  setIsAutoSyncEnabled?: Dispatch<SetStateAction<boolean>>;
+  isLiveMonitoringActive?: boolean;
+  setIsLiveMonitoringActive?: Dispatch<SetStateAction<boolean>>;
+  liveNotifications?: { id: string; message: string; timestamp: Date }[];
+  setLiveNotifications?: Dispatch<SetStateAction<{ id: string; message: string; timestamp: Date }[]>>;
+}
+
+export function useCloudSyncSettings(options: UseCloudSyncSettingsOptions) {
+  const [localFirebaseUrl, setLocalFirebaseUrl] = useState(() =>
+    localStorage.getItem('erp_firebase_url') || 'https://lofty-cabinet-427114-c9-default-rtdb.firebaseio.com'
+  );
+  const [localTeamId, setLocalTeamId] = useState(() =>
+    localStorage.getItem('erp_team_id') || Math.random().toString(36).substring(2, 7).toUpperCase()
+  );
+  const [otherTeamId, setOtherTeamId] = useState('');
+  const [localCloudSyncType, setLocalCloudSyncType] = useState<'default' | 'custom'>(() =>
+    (localStorage.getItem('erp_cloud_sync_type') as 'default' | 'custom') || 'default'
+  );
+  const [isCloudSyncing, setIsCloudSyncing] = useState(false);
+  const [lastCloudSyncTime, setLastCloudSyncTime] = useState(() => localStorage.getItem('erp_last_cloud_sync_time') || '');
+  const [cloudSyncLogs, setCloudSyncLogs] = useState<string[]>([]);
+  const [localIsAutoSyncEnabled, setLocalIsAutoSyncEnabled] = useState(() => {
+    const value = localStorage.getItem('erp_auto_sync_enabled');
+    return value === null ? true : value === 'true';
+  });
+  const [localIsLiveMonitoringActive, setLocalIsLiveMonitoringActive] = useState(() => {
+    const value = localStorage.getItem('erp_live_monitoring_active');
+    return value === null ? true : value === 'true';
+  });
+  const [localLiveNotifications, setLocalLiveNotifications] = useState<{ id: string; message: string; timestamp: Date }[]>([]);
+
+  const firebaseUrl = options.firebaseUrl ?? localFirebaseUrl;
+  const setFirebaseUrl = options.setFirebaseUrl ?? setLocalFirebaseUrl;
+  const teamId = options.teamId ?? localTeamId;
+  const setTeamId = options.setTeamId ?? setLocalTeamId;
+  const cloudSyncType = options.cloudSyncType ?? localCloudSyncType;
+  const setCloudSyncType = options.setCloudSyncType ?? setLocalCloudSyncType;
+  const isAutoSyncEnabled = options.isAutoSyncEnabled ?? localIsAutoSyncEnabled;
+  const setIsAutoSyncEnabled = options.setIsAutoSyncEnabled ?? setLocalIsAutoSyncEnabled;
+  const isLiveMonitoringActive = options.isLiveMonitoringActive ?? localIsLiveMonitoringActive;
+  const setIsLiveMonitoringActive = options.setIsLiveMonitoringActive ?? setLocalIsLiveMonitoringActive;
+  const liveNotifications = options.liveNotifications ?? localLiveNotifications;
+  const setLiveNotifications = options.setLiveNotifications ?? setLocalLiveNotifications;
+
+  useEffect(() => localStorage.setItem('erp_auto_sync_enabled', String(isAutoSyncEnabled)), [isAutoSyncEnabled]);
+  useEffect(() => localStorage.setItem('erp_live_monitoring_active', String(isLiveMonitoringActive)), [isLiveMonitoringActive]);
+
+  const addCloudSyncLog = (message: string) => {
+    setCloudSyncLogs(previous => [`[${new Date().toLocaleTimeString()}] ${message}`, ...previous.slice(0, 15)]);
+  };
+
+  return {
+    firebaseUrl, setFirebaseUrl, teamId, setTeamId, otherTeamId, setOtherTeamId,
+    cloudSyncType, setCloudSyncType, isCloudSyncing, setIsCloudSyncing,
+    lastCloudSyncTime, setLastCloudSyncTime, cloudSyncLogs, setCloudSyncLogs,
+    addCloudSyncLog, isAutoSyncEnabled, setIsAutoSyncEnabled,
+    isLiveMonitoringActive, setIsLiveMonitoringActive,
+    liveNotifications, setLiveNotifications,
+  };
+}

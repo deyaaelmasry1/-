@@ -1,0 +1,74 @@
+import { useState } from 'react';
+import type React from 'react';
+import type { TeamMember } from '../../../types';
+import { desktopDatabase } from '../../../utils/desktopDatabase';
+
+interface Params {
+  language: 'ar' | 'en';
+  teamMembers: TeamMember[];
+  setTeamMembers: React.Dispatch<React.SetStateAction<TeamMember[]>>;
+  showToast: (message: string, type?: any) => void;
+}
+
+export function useTeamController({ language, setTeamMembers, showToast }: Params) {
+  const [editingTeamMember, setEditingTeamMember] = useState<TeamMember | null>(null);
+  const [teamMemberActive, setTeamMemberActive] = useState(true);
+  const [newTeamName, setNewTeamName] = useState('');
+  const [newTeamRole, setNewTeamRole] = useState<'admin' | 'cashier' | 'storekeeper'>('cashier');
+  const [newTeamPhone, setNewTeamPhone] = useState('');
+  const [newTeamUsername, setNewTeamUsername] = useState('');
+  const [newTeamPassword, setNewTeamPassword] = useState('');
+
+  const resetTeamForm = () => {
+    setEditingTeamMember(null);
+    setTeamMemberActive(true);
+    setNewTeamName('');
+    setNewTeamRole('cashier');
+    setNewTeamPhone('');
+    setNewTeamUsername('');
+    setNewTeamPassword('');
+  };
+
+  const handleAddTeam = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTeamName.trim()) return;
+
+    const password = newTeamPassword ? await desktopDatabase.hashPassword(newTeamPassword) : (editingTeamMember?.password || '');
+    if (editingTeamMember) {
+      setTeamMembers(prev => prev.map(member => member.id === editingTeamMember.id ? {
+        ...member,
+        name: newTeamName.trim(),
+        role: newTeamRole,
+        phone: newTeamPhone,
+        username: newTeamUsername,
+        password,
+        active: teamMemberActive,
+      } : member));
+      showToast(language === 'ar' ? 'تم تعديل بيانات الموظف بنجاح!' : 'Staff member updated successfully!');
+    } else {
+      setTeamMembers(prev => [...prev, {
+        id: `team_${Date.now()}`,
+        name: newTeamName.trim(),
+        role: newTeamRole,
+        phone: newTeamPhone,
+        username: newTeamUsername,
+        password,
+        active: true,
+      }]);
+      showToast(language === 'ar' ? 'تمت إضافة عضو الفريق بنجاح!' : 'New staff member registered successfully!');
+    }
+    resetTeamForm();
+  };
+
+  return {
+    editingTeamMember, setEditingTeamMember,
+    teamMemberActive, setTeamMemberActive,
+    newTeamName, setNewTeamName,
+    newTeamRole, setNewTeamRole,
+    newTeamPhone, setNewTeamPhone,
+    newTeamUsername, setNewTeamUsername,
+    newTeamPassword, setNewTeamPassword,
+    resetTeamForm,
+    handleAddTeam,
+  };
+}

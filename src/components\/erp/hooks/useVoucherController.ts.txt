@@ -1,0 +1,137 @@
+import React, { useState } from 'react';
+import type { FinancialVoucher } from '../../../types';
+
+export function useVoucherController(args: any) {
+  const { setVouchers, customers, suppliers, setCustomers, setSuppliers, showToast, language, currentUser, playBeep } = args;
+
+  const [activeVoucherReceipt, setActiveVoucherReceipt] = useState<FinancialVoucher | null>(null);
+  const [newVoucherType, setNewVoucherType] = useState<'RECEIPT' | 'PAYMENT'>('RECEIPT');
+  const [newVoucherPartyType, setNewVoucherPartyType] = useState<'CUSTOMER' | 'SUPPLIER' | 'OTHER'>('CUSTOMER');
+  const [newVoucherPartyId, setNewVoucherPartyId] = useState<string>('');
+  const [newVoucherAmount, setNewVoucherAmount] = useState<string>('');
+  const [newVoucherMethod, setNewVoucherMethod] = useState<'CASH' | 'BANK' | 'CHECK' | 'SETTLEMENT'>('CASH');
+  const [newVoucherNotes, setNewVoucherNotes] = useState<string>('');
+  const [newVoucherCreator, setNewVoucherCreator] = useState<string>('');
+  const [newVoucherDate, setNewVoucherDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [voucherSearch, setVoucherSearch] = useState<string>('');
+  const [voucherTypeFilter, setVoucherTypeFilter] = useState<'ALL' | 'RECEIPT' | 'PAYMENT'>('ALL');
+  const [partySearchQuery, setPartySearchQuery] = useState<string>('');
+
+// Handle adding a manual payment voucher
+  const handleCreateVoucher = (e: React.FormEvent) => {
+  e.preventDefault();
+  const amountNum = parseFloat(newVoucherAmount);
+  if (!amountNum || amountNum <= 0) {
+    showToast(language === 'ar' ? 'يرجى إدخال مبلغ صحيح أكبر من الصفر!' : 'Please enter a valid amount greater than zero!', 'error');
+    return;
+  }
+
+  if (newVoucherPartyType !== 'OTHER' && !newVoucherPartyId) {
+    showToast(language === 'ar' ? 'يرجى تحديد العميل أو المورد المعني!' : 'Please select the relevant customer or supplier!', 'error');
+    return;
+  }
+
+  const nextId = `vouch_${Date.now()}`;
+  const prefix = newVoucherType === 'RECEIPT' ? 'RCV' : 'PAY';
+  const randomNum = Math.floor(1000 + Math.random() * 9000);
+  const voucherNumber = `${prefix}-${randomNum}`;
+
+  const newVoucher: FinancialVoucher = {
+    id: nextId,
+    voucherNumber,
+    type: newVoucherType,
+    partyType: newVoucherPartyType,
+    partyId: newVoucherPartyType !== 'OTHER' ? newVoucherPartyId : undefined,
+    amount: amountNum,
+    date: newVoucherDate || new Date().toISOString().split('T')[0],
+    paymentMethod: newVoucherMethod,
+    notes: newVoucherNotes.trim() || undefined,
+    createdBy: newVoucherCreator.trim() || currentUser?.name || undefined
+  };
+
+  // 1. Update list of vouchers
+  setVouchers(prev => [newVoucher, ...prev]);
+
+  // 2. Adjust Balance of Customer / Supplier
+  if (newVoucherPartyType === 'CUSTOMER') {
+    const activeCust = customers.find(c => c.id === newVoucherPartyId);
+    const custName = activeCust?.name || '';
+    const custPhone = activeCust?.phone || '';
+
+    setCustomers(prev => prev.map(cust => {
+      if (cust.id === newVoucherPartyId) {
+        const multiplier = newVoucherType === 'RECEIPT' ? -1 : 1;
+        const updatedBalance = cust.balance + (multiplier * amountNum);
+        return { ...cust, balance: updatedBalance };
+      }
+      return cust;
+    }));
+
+    // If it is a SETTLEMENT, find matching supplier and update their balance too
+    if (newVoucherMethod === 'SETTLEMENT' && custName) {
+      setSuppliers(prev => prev.map(sup => {
+        const nameMatch = sup.name.trim().toLowerCase() === custName.trim().toLowerCase();
+        const phoneMatch = custPhone && sup.phone && sup.phone.trim() === custPhone.trim();
+        if (nameMatch || phoneMatch) {
+          // Supplier change is opposite of customer change
+          // Customer RECEIPT decreases customer balance (-1), so supplier balance increases (+1)
+          const multiplier = newVoucherType === 'RECEIPT' ? 1 : -1;
+          const updatedBalance = (sup.balance || 0) + (multiplier * amountNum);
+          return { ...sup, balance: updatedBalance };
+        }
+        return sup;
+      }));
+    }
+  } else if (newVoucherPartyType === 'SUPPLIER') {
+    const activeSup = suppliers.find(s => s.id === newVoucherPartyId);
+    const supName = activeSup?.name || '';
+    const supPhone = activeSup?.phone || '';
+
+    setSuppliers(prev => prev.map(sup => {
+      if (sup.id === newVoucherPartyId) {
+        const multiplier = newVoucherType === 'PAYMENT' ? 1 : -1;
+        const updatedBalance = (sup.balance || 0) + (multiplier * amountNum);
+        return { ...sup, balance: updatedBalance };
+      }
+      return sup;
+    }));
+
+    // If it is a SETTLEMENT, find matching customer and update their balance too
+    if (newVoucherMethod === 'SETTLEMENT' && supName) {
+      setCustomers(prev => prev.map(cust => {
+        const nameMatch = cust.name.trim().toLowerCase() === supName.trim().toLowerCase();
+        const phoneMatch = supPhone && cust.phone && cust.phone.trim() === supPhone.trim();
+        if (nameMatch || phoneMatch) {
+          // Customer change is opposite of supplier change
+          // Supplier PAYMENT increases supplier balance (+1), so customer balance decreases (-1)
+          const multiplier = newVoucherType === 'PAYMENT' ? -1 : 1;
+          const updatedBalance = cust.balance + (multiplier * amountNum);
+          return { ...cust, balance: updatedBalance };
+        }
+        return cust;
+      }));
+    }
+  }
+
+  // Reset fields
+  setNewVoucherAmount('');
+  setNewVoucherNotes('');
+  setNewVoucherPartyId('');
+  setPartySearchQuery('');
+  
+  // Show Toast
+  showToast(
+    language === 'ar' 
+      ? `تم تسجيل السند ${voucherNumber} بنجاح وتحديث الحساب ماليّاً!` 
+      : `Voucher ${voucherNumber} registered successfully and ledger updated!`,
+    'success'
+  );
+  
+  // Auto-open printable receipt immediately
+  setActiveVoucherReceipt(newVoucher);
+  
+  playBeep('success');
+};
+
+  return { activeVoucherReceipt, setActiveVoucherReceipt, newVoucherType, setNewVoucherType, newVoucherPartyType, setNewVoucherPartyType, newVoucherPartyId, setNewVoucherPartyId, newVoucherAmount, setNewVoucherAmount, newVoucherMethod, setNewVoucherMethod, newVoucherNotes, setNewVoucherNotes, newVoucherCreator, setNewVoucherCreator, newVoucherDate, setNewVoucherDate, voucherSearch, setVoucherSearch, voucherTypeFilter, setVoucherTypeFilter, partySearchQuery, setPartySearchQuery, handleCreateVoucher };
+}

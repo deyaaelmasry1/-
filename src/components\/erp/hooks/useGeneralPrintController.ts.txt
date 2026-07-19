@@ -1,0 +1,262 @@
+import { Language } from '../../../utils/translations';
+import { printHtml } from '../../../utils/printHelper';
+
+interface Args {
+  language: Language;
+  companyLogo?: string;
+  companyName?: string;
+  t: any;
+  printShowHeader: boolean;
+  printShowFooter: boolean;
+  printCopies: number;
+  printPaperSize: string;
+  printOrientation: string;
+  printMargins: string;
+  printColor: string;
+  printScale: number;
+  printPrinter: string;
+  showToast: (message: string, type?: 'success' | 'error') => void;
+}
+
+export function useGeneralPrintController(args: Args) {
+  const { language, companyLogo, companyName, t, printShowHeader, printShowFooter, printCopies,
+    printPaperSize, printOrientation, printMargins, printColor, printScale, printPrinter, showToast } = args;
+  const handlePopoutPrint = (title: string, subtitle: string, contentHtml: string) => {
+    const isAr = language === 'ar';
+    const isElectron = !!(window.electronAPI && window.electronAPI.isElectron);
+
+    // Determine orientation classes & widths based on options
+    let paperStyle = '';
+    if (printPaperSize === 'Thermal80') {
+      paperStyle = 'width: 80mm; padding: 10px; font-family: monospace; font-size: 11px;';
+    } else if (printPaperSize === 'Thermal58') {
+      paperStyle = 'width: 58mm; padding: 8px; font-family: monospace; font-size: 10px;';
+    } else {
+      // A4 or Letter
+      const isPortrait = printOrientation === 'portrait';
+      const width = isPortrait ? '210mm' : '297mm';
+      const height = isPortrait ? '297mm' : '210mm';
+      let padding = '20mm';
+      if (printMargins === 'narrow') padding = '10mm';
+      if (printMargins === 'wide') padding = '35mm';
+      if (printMargins === 'none') padding = '0mm';
+      
+      paperStyle = `width: ${width}; min-height: ${height}; padding: ${padding}; box-sizing: border-box; background: white;`;
+    }
+
+    // Color/mono
+    const grayscaleFilter = printColor === 'mono' ? 'filter: grayscale(100%);' : '';
+
+    const logoHtml = companyLogo && printShowHeader ? `
+      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+        <img src="${companyLogo}" style="max-height: 50px; max-width: 120px; object-fit: contain;" />
+        <div>
+          <h2 style="margin: 0; font-size: 18px; color: #4f46e5; font-weight: 800;">${companyName || t.appTitle}</h2>
+          <p style="margin: 2px 0 0 0; font-size: 11px; color: #64748b;">${subtitle}</p>
+        </div>
+      </div>
+    ` : printShowHeader ? `
+      <div style="margin-bottom: 16px;">
+        <h2 style="margin: 0; font-size: 18px; color: #4f46e5; font-weight: 800;">${companyName || t.appTitle}</h2>
+        <p style="margin: 2px 0 0 0; font-size: 11px; color: #64748b;">${subtitle}</p>
+      </div>
+    ` : '';
+
+    const headerBlock = printShowHeader ? `
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 16px;">
+        ${logoHtml}
+        <div style="text-align: right; font-size: 10px; font-family: monospace; color: #94a3b8;">
+          <p style="margin: 0;">${isAr ? 'تاريخ الطباعة:' : 'Print Date:'} ${new Date().toLocaleString()}</p>
+          <p style="margin: 4px 0 0 0;">${isAr ? 'عدد النسخ:' : 'Copies:'} ${printCopies}</p>
+        </div>
+      </div>
+    ` : '';
+
+    const footerBlock = printShowFooter ? `
+      <div style="margin-top: 40px; border-top: 1px dashed #cbd5e1; padding-top: 12px; text-align: center; font-size: 10px; color: #94a3b8; font-family: monospace;">
+        <p style="margin: 0;">${isAr ? 'تمت الطباعة والتحقق عبر نظام ERP الذكي' : 'Printed and verified via smart ERP Ledger'}</p>
+        <p style="margin: 4px 0 0 0;">Page 1 of 1</p>
+      </div>
+    ` : '';
+
+    const getBaseHtml = (withScript: boolean) => `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>${title}</title>
+          <style>
+            @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Inter:wght@400;500;600;700;800&display=swap');
+            
+            body {
+              margin: 0;
+              padding: 0;
+              background-color: #f8fafc;
+              font-family: 'Cairo', 'Inter', sans-serif;
+              display: flex;
+              justify-content: center;
+              align-items: flex-start;
+              min-height: 100vh;
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+            }
+
+            .print-page {
+              ${paperStyle}
+              ${grayscaleFilter}
+              box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+              margin: 20px auto;
+              position: relative;
+            }
+
+            /* Custom internal utility styles to match tailwind markup in injected html */
+            .flex { display: flex !important; }
+            .justify-between { justify-content: space-between !important; }
+            .items-center { align-items: center !important; }
+            .border-b { border-bottom: 1px solid #e2e8f0 !important; }
+            .border-t { border-top: 1px solid #e2e8f0 !important; }
+            .p-1 { padding: 4px !important; }
+            .p-2 { padding: 8px !important; }
+            .p-3 { padding: 12px !important; }
+            .p-4 { padding: 16px !important; }
+            .p-5 { padding: 20px !important; }
+            .p-6 { padding: 24px !important; }
+            .p-8 { padding: 32px !important; }
+            .p-10 { padding: 40px !important; }
+            .pb-4 { padding-bottom: 16px !important; }
+            .pt-4 { padding-top: 16px !important; }
+            .font-bold { font-weight: 700 !important; }
+            .font-black { font-weight: 900 !important; }
+            .text-indigo-600 { color: #4f46e5 !important; }
+            .text-indigo-700 { color: #4338ca !important; }
+            .bg-slate-50 { background-color: #f8fafc !important; }
+            .bg-indigo-50 { background-color: #e0e7ff !important; }
+            .bg-emerald-50 { background-color: #ecfdf5 !important; color: #065f46 !important; border-color: #a7f3d0 !important; }
+            .bg-rose-50 { background-color: #fff1f2 !important; color: #9f1239 !important; border-color: #fecdd3 !important; }
+            .font-mono { font-family: monospace !important; }
+            
+            @page {
+              size: ${printPaperSize === 'Thermal80' || printPaperSize === 'Thermal58' ? 'auto' : `${printPaperSize === 'Letter' ? 'letter' : 'A4'} ${printOrientation}`};
+              margin: 0;
+            }
+            @media print {
+              html, body {
+                margin: 0 !important;
+                padding: 0 !important;
+                background: white !important;
+              }
+              body {
+                display: block;
+              }
+              .print-page {
+                box-shadow: none !important;
+                border: none !important;
+                margin: 0 !important;
+                width: ${printPaperSize === 'Thermal80' ? '80mm' : printPaperSize === 'Thermal58' ? '58mm' : '100%'} !important;
+                max-width: ${printPaperSize === 'Thermal80' ? '80mm' : printPaperSize === 'Thermal58' ? '58mm' : 'none'} !important;
+                min-height: 0 !important;
+                min-height: auto !important;
+                page-break-inside: avoid !important;
+              }
+              ${printPaperSize !== 'Thermal80' && printPaperSize !== 'Thermal58' ? `
+              /* Scale up fonts slightly when printing A4/Letter to ensure they are highly readable and not too small */
+              body, .print-page {
+                font-size: 15px !important;
+              }
+              .text-xs { font-size: 13px !important; }
+              .text-sm { font-size: 15px !important; }
+              .text-base { font-size: 17px !important; }
+              .text-lg { font-size: 19px !important; }
+              .text-xl { font-size: 24px !important; }
+              .text-2xl { font-size: 28px !important; }
+              .text-3xl { font-size: 34px !important; }
+              .text-4xl { font-size: 40px !important; }
+              ` : ''}
+            }
+          </style>
+        </head>
+        <body dir="${isAr ? 'rtl' : 'ltr'}">
+          <div class="print-page">
+            ${headerBlock}
+            
+            <h3 style="text-align: center; margin-bottom: 20px; font-size: 16px; font-weight: 800; border-bottom: 1px dashed #cbd5e1; padding-bottom: 8px;">
+              ${title}
+            </h3>
+
+            <div style="font-size: 12px; line-height: 1.6; color: #334155;">
+              ${contentHtml}
+            </div>
+
+            ${footerBlock}
+          </div>
+          ${withScript ? `
+          <script>
+            window.addEventListener('DOMContentLoaded', () => {
+              setTimeout(() => {
+                window.print();
+                window.onafterprint = () => window.close();
+              }, 600);
+            });
+          </script>
+          ` : ''}
+        </body>
+      </html>
+    `;
+
+    const silentPrint = printPrinter !== 'default' && printPrinter !== 'pdf';
+
+    if (isElectron && window.electronAPI && silentPrint) {
+      // Build options
+      const options = {
+        silent: true,
+        printBackground: true,
+        deviceName: printPrinter,
+        color: printColor === 'color',
+        landscape: printOrientation === 'landscape',
+        copies: printCopies
+      };
+
+      const htmlToPrint = getBaseHtml(false);
+
+      window.electronAPI.printDocument(htmlToPrint, options)
+        .then((res) => {
+          if (res.success) {
+            showToast(
+              isAr 
+                ? '✅ تم إرسال المستند إلى الطباعة بنجاح!' 
+                : '✅ Document sent to printing successfully!', 
+              'success'
+            );
+          } else {
+            showToast(
+              isAr 
+                ? `❌ فشل عملية الطباعة: ${res.error || 'تم الإلغاء أو خطأ في الاتصال'}` 
+                : `❌ Print failed: ${res.error || 'Cancelled or connection error'}`, 
+              'error'
+            );
+          }
+        })
+        .catch((err) => {
+          console.error('Electron printing error:', err);
+          showToast(
+            isAr 
+              ? '❌ حدث خطأ أثناء الاتصال بواجهة طباعة إلكترون!' 
+              : '❌ Error communicating with Electron print interface!', 
+            'error'
+          );
+        });
+    } else {
+      // Print via the main window to ensure a beautiful print preview with no "not supported" error!
+      const popoutLayout = (printPaperSize === 'Thermal80' || printPaperSize === 'Thermal58') ? 'thermal' : 'a4';
+      printHtml(getBaseHtml(false), popoutLayout, title);
+
+      showToast(
+        isAr 
+          ? '✅ تم تشغيل معاينة الطباعة الذكية والربط بنجاح!' 
+          : '✅ Smart print preview loaded successfully!', 
+        'success'
+      );
+    }
+  };
+
+  return { handlePopoutPrint };
+}

@@ -1,0 +1,110 @@
+import React, { useState } from 'react';
+import { Expense, Partner, PartnerDistribution, TeamMember } from '../../../types';
+import { Language } from '../../../utils/translations';
+
+interface Args {
+  partners: Partner[];
+  setPartners: React.Dispatch<React.SetStateAction<Partner[]>>;
+  setDistributions: React.Dispatch<React.SetStateAction<PartnerDistribution[]>>;
+  setExpenses: React.Dispatch<React.SetStateAction<Expense[]>>;
+  language: Language;
+  currentUser: TeamMember;
+  companyName?: string;
+  showToast: (message: string, type?: 'success' | 'error') => void;
+  viewingDistribution: PartnerDistribution | null;
+  setViewingDistribution: React.Dispatch<React.SetStateAction<PartnerDistribution | null>>;
+  setIsEditingDist: React.Dispatch<React.SetStateAction<boolean>>;
+  distEditAmount: number;
+  distEditDate: string;
+  distEditNotes: string;
+  distEditStatus: 'PAID' | 'PENDING';
+  distEditPartnerId: string;
+  setGeneralPrintPreview: React.Dispatch<React.SetStateAction<{ title: string; subtitle: string; contentHtml: string } | null>>;
+}
+
+export function usePartnerOperationsController(args: Args) {
+  const { partners, setPartners, setDistributions, setExpenses, language, currentUser, companyName, showToast,
+    viewingDistribution, setViewingDistribution, setIsEditingDist, distEditAmount, distEditDate,
+    distEditNotes, distEditStatus, distEditPartnerId, setGeneralPrintPreview } = args;
+  const [partnerName, setPartnerName] = useState('');
+  const [partnerEquity, setPartnerEquity] = useState(10);
+  const [partnerInvestment, setPartnerInvestment] = useState(0);
+  const [partnerNotes, setPartnerNotes] = useState('');
+  const [newDistPartnerId, setNewDistPartnerId] = useState('all');
+  const [newDistAmount, setNewDistAmount] = useState(0);
+  const [newDistNotes, setNewDistNotes] = useState('');
+  const [newDistDate, setNewDistDate] = useState(new Date().toISOString().split('T')[0]);
+  const [newDistStatus, setNewDistStatus] = useState<'PAID' | 'PENDING'>('PAID');
+
+  const handleAddPartner = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!partnerName.trim()) return showToast(language === 'ar' ? 'يرجى إدخال اسم الشريك!' : 'Please enter partner name!', 'error');
+    const currentTotalEquity = partners.reduce((sum, p) => sum + p.equityPercentage, 0);
+    if (currentTotalEquity + Number(partnerEquity) > 100) {
+      showToast(language === 'ar' ? `عذراً، مجموع حصص الشركاء لا يمكن أن يتجاوز 100%! الحصص المحجوزة حالياً: ${currentTotalEquity}%، المتبقي المتاح: ${100 - currentTotalEquity}%` : `Sorry, sum of partner equities cannot exceed 100%! Currently allocated: ${currentTotalEquity}%, Remaining available: ${100 - currentTotalEquity}%`, 'error');
+      return;
+    }
+    setPartners(prev => [...prev, { id: `partner_${Date.now()}`, name: partnerName, equityPercentage: Number(partnerEquity), investedAmount: Number(partnerInvestment), notes: partnerNotes || undefined }]);
+    showToast(language === 'ar' ? 'تم تسجيل الشريك الجديد وحفظ حصته بنجاح!' : 'New partner registered and equity saved successfully!', 'success');
+    setPartnerName(''); setPartnerEquity(10); setPartnerInvestment(0); setPartnerNotes('');
+  };
+
+  const handleCreateDistribution = (partnerId: string, totalAmount: number, notes: string, date: string, status: 'PAID' | 'PENDING') => {
+    if (totalAmount <= 0) return showToast(language === 'ar' ? 'يرجى إدخال مبلغ توزيع صحيح!' : 'Please enter a valid distribution amount!', 'error');
+    const isoDate = date ? new Date(date).toISOString() : new Date().toISOString();
+    if (partnerId === 'all') {
+      if (!partners.length) return showToast(language === 'ar' ? 'لا يوجد شركاء مسجلين لتوزيع الأرباح عليهم!' : 'No registered partners to distribute profits to!', 'error');
+      const timestamp = Date.now();
+      const created = partners.flatMap((p, idx) => {
+        const amount = totalAmount * (p.equityPercentage / 100);
+        return amount > 0 ? [{ id: `dist_${timestamp}_${idx}_${Math.random().toString(36).slice(2, 5)}`, partnerId: p.id, partnerName: p.name, amount: Number(amount.toFixed(2)), date: isoDate, notes: notes || (language === 'ar' ? 'توزيع أرباح جماعي نسبي' : 'Proportional collective profit distribution'), status }] : [];
+      });
+      if (!created.length) return showToast(language === 'ar' ? 'لم يتم إنتاج أي مبالغ توزيع مستحقة!' : 'No distribution amounts were accrued!', 'error');
+      setDistributions(prev => [...created, ...prev]);
+      if (status === 'PAID') setExpenses(prev => [{ id: `exp_payout_${Date.now()}`, title: language === 'ar' ? 'توزيع أرباح جماعي على الشركاء' : 'Group profit distribution to partners', amount: totalAmount, category: 'other', date: isoDate, notes: notes || 'Group partner dividend payout' }, ...prev]);
+      showToast(language === 'ar' ? `تم توزيع مبلغ ${totalAmount.toLocaleString()} $ بنجاح وتوليد ${created.length} قيود توزيع للشركاء!` : `Successfully distributed $${totalAmount.toLocaleString()} and generated ${created.length} partner records!`, 'success');
+      return;
+    }
+    const partner = partners.find(p => p.id === partnerId);
+    if (!partner) return showToast(language === 'ar' ? 'الشريك غير موجود!' : 'Partner not found!', 'error');
+    setDistributions(prev => [{ id: `dist_${Date.now()}`, partnerId: partner.id, partnerName: partner.name, amount: totalAmount, date: isoDate, notes: notes || undefined, status }, ...prev]);
+    if (status === 'PAID') setExpenses(prev => [{ id: `exp_payout_${Date.now()}`, title: language === 'ar' ? `توزيع أرباح للشريك - ${partner.name}` : `Profit distribution to partner - ${partner.name}`, amount: totalAmount, category: 'other', date: isoDate, notes: notes || 'Individual partner dividend payout' }, ...prev]);
+    showToast(language === 'ar' ? `تم تسجيل عملية توزيع بقيمة ${totalAmount.toLocaleString()} $ للشريك ${partner.name} بنجاح!` : `Successfully registered distribution of $${totalAmount.toLocaleString()} to partner ${partner.name}!`, 'success');
+  };
+
+  const handleDeleteDistribution = (id: string) => {
+    if (!window.confirm(language === 'ar' ? 'هل أنت متأكد من حذف عملية التوزيع هذه؟' : 'Are you sure you want to delete this distribution?')) return;
+    setDistributions(prev => prev.filter(d => d.id !== id)); setViewingDistribution(null);
+    showToast(language === 'ar' ? 'تم حذف عملية التوزيع بنجاح!' : 'Distribution deleted successfully!', 'success');
+  };
+
+  const handleUpdateDistribution = (e: React.FormEvent) => {
+    e.preventDefault(); if (!viewingDistribution) return;
+    const partner = partners.find(p => p.id === distEditPartnerId);
+    setDistributions(prev => prev.map(d => d.id === viewingDistribution.id ? { ...d, partnerId: distEditPartnerId, partnerName: partner?.name || d.partnerName, amount: Number(distEditAmount), date: new Date(distEditDate).toISOString(), notes: distEditNotes, status: distEditStatus } : d));
+    setViewingDistribution(null); setIsEditingDist(false);
+    showToast(language === 'ar' ? 'تم تحديث بيانات عملية التوزيع بنجاح!' : 'Distribution updated successfully!', 'success');
+  };
+
+  const handlePrintDistribution = (dist: PartnerDistribution) => {
+    const isAr = language === 'ar';
+    const statusLabel = dist.status === 'PAID' ? (isAr ? '🟢 مدفوع ومصروف' : 'Paid & Paid out') : (isAr ? '🟡 معلق ومستحق' : 'Pending/Unpaid');
+    setGeneralPrintPreview({
+      title: isAr ? 'سند صرف وتوزيع أرباح للشركاء' : 'Partner Dividend & Shareholder Disbursal Voucher',
+      subtitle: isAr ? 'مستند مالي معتمد لإثبات توزيع الأرباح وحصص رأس المال' : 'Official accredited financial dividend settlement record',
+      contentHtml: `<div class="space-y-6"><div class="border border-slate-200 rounded-2xl p-6 bg-slate-50/50 space-y-4"><div class="flex justify-between items-center border-b pb-4"><div><span class="text-[10px] text-slate-400 font-bold block uppercase">VOUCHER ID</span><span class="font-mono font-bold text-slate-800 text-xs">${dist.id}</span></div><div class="text-right"><span class="text-[10px] text-slate-400 font-bold block uppercase">${isAr ? 'الحالة' : 'STATUS'}</span><span class="font-extrabold text-xs text-indigo-600">${statusLabel}</span></div></div><div class="grid grid-cols-2 gap-4 text-xs"><div><span>${isAr ? 'المستفيد / الشريك' : 'BENEFICIARY / PARTNER'}</span><strong>${dist.partnerName}</strong></div><div><span>${isAr ? 'التاريخ' : 'DATE'}</span><strong>${new Date(dist.date).toLocaleDateString(isAr ? 'ar-EG' : 'en-US')}</strong></div></div><p>${dist.notes || (isAr ? 'لا توجد ملاحظات خاصة' : 'No custom notes provided.')}</p><div><strong>${isAr ? 'المبلغ الإجمالي المصروف:' : 'Total Disbursed Amount:'}</strong> $${dist.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</div></div><div>${isAr ? 'توقيع المستلم' : 'Beneficiary Signature'}: ${dist.partnerName} — ${isAr ? 'الإدارة' : 'Manager'}: ${currentUser.name}</div></div>`
+    });
+  };
+
+  const handleShareDistribution = async (dist: PartnerDistribution) => {
+    const isAr = language === 'ar';
+    const text = `${isAr ? '📊 [سند توزيع أرباح شريك]' : '📊 [Partner Dividend Voucher]'}\n${isAr ? 'رقم السند:' : 'Voucher ID:'} ${dist.id}\n${isAr ? 'الشريك:' : 'Partner:'} ${dist.partnerName}\n${isAr ? 'المبلغ:' : 'Amount:'} $${dist.amount.toLocaleString()}\n${isAr ? 'التاريخ:' : 'Date:'} ${new Date(dist.date).toLocaleDateString(isAr ? 'ar-EG' : 'en-US')}\n${companyName || (isAr ? 'المؤسسة' : 'Company')}`;
+    try { await navigator.clipboard.writeText(text); showToast(isAr ? '📋 تم نسخ تفاصيل سند التوزيع إلى الحافظة بنجاح لمشاركتها!' : '📋 Distribution details copied to clipboard successfully!', 'success'); }
+    catch { showToast(isAr ? 'فشل نسخ تفاصيل السند!' : 'Failed to copy voucher details!', 'error'); }
+  };
+
+  return { partnerName, setPartnerName, partnerEquity, setPartnerEquity, partnerInvestment, setPartnerInvestment, partnerNotes, setPartnerNotes,
+    newDistPartnerId, setNewDistPartnerId, newDistAmount, setNewDistAmount, newDistNotes, setNewDistNotes, newDistDate, setNewDistDate,
+    newDistStatus, setNewDistStatus, handleAddPartner, handleCreateDistribution, handleDeleteDistribution, handleUpdateDistribution,
+    handlePrintDistribution, handleShareDistribution };
+}

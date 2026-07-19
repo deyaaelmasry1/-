@@ -1,0 +1,26 @@
+import { useSalesController } from '../controllers/useSalesController';
+import { usePurchaseController } from '../controllers/usePurchaseController';
+import { useTreasuryController } from '../controllers/useTreasuryController';
+import { useReturnsController } from '../controllers/useReturnsController';
+import { useDevicesController } from '../controllers/useDevicesController';
+
+interface Args {
+  sales: Parameters<typeof useSalesController>[0];
+  purchase: Parameters<typeof usePurchaseController>[0];
+  treasury: Parameters<typeof useTreasuryController>[0];
+  returns: Parameters<typeof useReturnsController>[0];
+  devices: Parameters<typeof useDevicesController>[0];
+}
+
+/**
+ * Composition root for the core operational controllers.
+ * The runtime supplies domain inputs once and consumes a stable grouped API.
+ */
+export function useCoreErpControllers(args: Args) {
+  const sales = useSalesController(args.sales);
+  const purchase = usePurchaseController(args.purchase);
+  const treasury = useTreasuryController(args.treasury);
+  const returns = useReturnsController(args.returns);
+  const devices = useDevicesController(args.devices);
+  return { sales, purchase, treasury, returns, devices };
+}

@@ -1,0 +1,892 @@
+import React, { useState } from 'react';
+import type { Category, Customer, Expense, FinancialVoucher, Invoice, Partner, PartnerDistribution, Product, ProfessionalService, Supplier, TeamMember, Transaction, Warehouse, WarehouseTransfer } from '../../../types';
+
+export function useMobileDataTransfer(args: any) {
+  const { products, categories, suppliers, transactions, customers, warehouses, transfers, expenses, teamMembers, partners, distributions, services, vouchers, invoices, language, companyName, companyAddress, companyPhone, currentUser, setProducts, setCategories, setSuppliers, setTransactions, setCustomers, setWarehouses, setTransfers, setExpenses, setTeamMembers, setPartners, setDistributions, setServices, setVouchers, setInvoices, setCompanyName, setCompanyPhone, setCompanyAddress, showToast, playBeep, deterministicIdToInteger, getTxSignature } = args;
+  const [parsedMobileData, setParsedMobileData] = useState<any | null>(null);
+  const [importStats, setImportStats] = useState<{ warehouses: number; products: number; customers: number; suppliers: number; invoices: number } | null>(null);
+  const [importMode, setImportMode] = useState<'merge' | 'overwrite' | 'update'>('merge');
+  // Handle Mobile File JSON Upload and Parsing
+  const handleMobileFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        const parsed = JSON.parse(text);
+
+        // Simple validation of keys
+        if (!parsed.products && !parsed.salesInvoices && !parsed.customers) {
+          showToast(
+            language === 'ar'
+              ? 'تنبيه: الملف المرفق لا يبدو ملف داتا متوافق مع نظام الموبايل المعتمد!'
+              : 'Warning: Uploaded JSON does not match the standard mobile ERP layout!',
+            'error'
+          );
+          return;
+        }
+
+        setParsedMobileData(parsed);
+
+        // Count stats
+        const warehousesCount = Array.isArray(parsed.warehouses) ? parsed.warehouses.length : 0;
+        const productsCount = Array.isArray(parsed.products) ? parsed.products.length : 0;
+        const customersCount = Array.isArray(parsed.customers) ? parsed.customers.length : 0;
+        const suppliersCount = Array.isArray(parsed.suppliers) ? parsed.suppliers.length : 0;
+        const invoicesCount = (Array.isArray(parsed.salesInvoices) ? parsed.salesInvoices.length : 0) + 
+                              (Array.isArray(parsed.purchaseInvoices) ? parsed.purchaseInvoices.length : 0);
+
+        setImportStats({
+          warehouses: warehousesCount,
+          products: productsCount,
+          customers: customersCount,
+          suppliers: suppliersCount,
+          invoices: invoicesCount
+        });
+
+        showToast(
+          language === 'ar'
+            ? `تم تحليل الملف بنجاح! تم العثور على: ${productsCount} منتج و ${invoicesCount} فاتورة.`
+            : `File parsed successfully! Detected ${productsCount} products and ${invoicesCount} invoices.`,
+          'success'
+        );
+        playBeep('success');
+      } catch (err) {
+        showToast(language === 'ar' ? 'فشل قراءة الملف كصيغة JSON صالحة' : 'Failed to read as a valid JSON format.', 'error');
+        playBeep('error');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // Convert Mobile JSON schemas to PC React Application State
+  const handleImportMobileData = (mode: 'merge' | 'overwrite' | 'update') => {
+    if (!parsedMobileData) {
+      showToast(language === 'ar' ? 'يرجى تحميل ملف بيانات الموبايل أولاً!' : 'Please upload a mobile data backup file first!', 'error');
+      return;
+    }
+
+    try {
+      // 1. Parse Warehouses
+      const importedWarehouses: Warehouse[] = [];
+      if (Array.isArray(parsedMobileData.warehouses)) {
+        parsedMobileData.warehouses.forEach((w: any) => {
+          importedWarehouses.push({
+            id: `wh_${w.id}`,
+            name: w.name || `مستودع ${w.id}`,
+            location: w.description || w.notes || ''
+          });
+        });
+      }
+
+      // 2. Parse Customers
+      const importedCustomers: Customer[] = [];
+      if (Array.isArray(parsedMobileData.customers)) {
+        parsedMobileData.customers.forEach((c: any) => {
+          importedCustomers.push({
+            id: `cust_${c.id}`,
+            name: c.name || `عميل ${c.id}`,
+            phone: c.phone || '',
+            email: '',
+            address: c.address || '',
+            balance: c.openingBalance || 0
+          });
+        });
+      }
+
+      // 3. Parse Suppliers
+      const importedSuppliers: Supplier[] = [];
+      if (Array.isArray(parsedMobileData.suppliers)) {
+        parsedMobileData.suppliers.forEach((s: any) => {
+          importedSuppliers.push({
+            id: `sup_${s.id}`,
+            name: s.name || `مورد ${s.id}`,
+            company: '',
+            phone: s.phone || '',
+            email: '',
+            address: s.address || '',
+            balance: s.openingBalance || 0
+          });
+        });
+      }
+
+      // 4. Categories resolution
+      const importedCategories: Category[] = [];
+      const catNameToIdMap: { [key: string]: string } = {};
+      if (Array.isArray(parsedMobileData.products)) {
+        const uniqueCats = Array.from(new Set(parsedMobileData.products.map((p: any) => p.category || 'تصنيف عام')));
+        uniqueCats.forEach((catName: any, idx) => {
+          const catId = `cat_mob_${idx + 1}`;
+          importedCategories.push({
+            id: catId,
+            name: catName
+          });
+          catNameToIdMap[catName] = catId;
+        });
+      }
+
+      // 5. Parse Products & Stocks
+      const importedProducts: Product[] = [];
+      if (Array.isArray(parsedMobileData.products)) {
+        parsedMobileData.products.forEach((p: any) => {
+          let quantity = 0;
+          let defaultWhId = 'wh_1';
+          if (Array.isArray(parsedMobileData.productStocks)) {
+            const stocks = parsedMobileData.productStocks.filter((s: any) => s.productId === p.id);
+            stocks.forEach((s: any) => {
+              quantity += s.quantity || 0;
+              if (s.warehouseId) {
+                defaultWhId = `wh_${s.warehouseId}`;
+              }
+            });
+          }
+
+          importedProducts.push({
+            id: `prod_${p.id}`,
+            code: p.barcode || `BAR_${p.id}`,
+            name: p.name || `منتج ${p.id}`,
+            categoryId: catNameToIdMap[p.category || 'تصنيف عام'] || 'cat_1',
+            quantity: quantity,
+            minQuantity: p.minStock || 5,
+            costPrice: p.purchasePrice || p.averageCost || 0,
+            sellingPrice: p.salePrice || 0,
+            description: p.description || '',
+            warehouseId: defaultWhId
+          });
+        });
+      }
+
+      // 6. Parse Expenses
+      const importedExpenses: Expense[] = [];
+      if (Array.isArray(parsedMobileData.expenses)) {
+        parsedMobileData.expenses.forEach((e: any, idx: number) => {
+          importedExpenses.push({
+            id: e.id ? `exp_${e.id}` : `exp_mob_${idx}_${Date.now()}`,
+            title: `${e.category || 'مصروف عام'} ${e.notes ? '- ' + e.notes : ''}`,
+            amount: e.amount || 0,
+            category: 'other',
+            date: e.date ? new Date(e.date).toISOString() : new Date().toISOString(),
+            notes: e.notes || ''
+          });
+        });
+      }
+
+      // 7. Parse Transactions from salesItems and purchaseItems
+      const importedTransactions: Transaction[] = [];
+
+      // Map sales invoices items
+      if (Array.isArray(parsedMobileData.salesItems) && Array.isArray(parsedMobileData.salesInvoices)) {
+        parsedMobileData.salesItems.forEach((item: any) => {
+          const inv = parsedMobileData.salesInvoices.find((i: any) => i.id === item.invoiceId);
+          const invDate = inv ? new Date(inv.date).toISOString() : new Date().toISOString();
+          const invNotes = inv ? inv.notes : '';
+          const custId = inv && inv.customerId ? `cust_${inv.customerId}` : undefined;
+
+          // Payment method mapping
+          let pm = 'CASH';
+          if (inv) {
+            const methodUpper = (inv.paymentMethod || '').toUpperCase();
+            if (methodUpper.includes('آجل') || methodUpper.includes('DEBT')) {
+              pm = 'DEBT';
+            } else if (methodUpper.includes('تقسيط') || methodUpper.includes('INSTALLMENT')) {
+              pm = 'INSTALLMENT';
+            } else if (methodUpper.includes('كارت') || methodUpper.includes('CARD') || methodUpper.includes('أمان') || methodUpper.includes('فوري') || methodUpper.includes('AMAN') || methodUpper.includes('FAWRY')) {
+              pm = 'CARD';
+            }
+          }
+
+          let prefix = 'tx_sale';
+          const notesLower = (invNotes || '').toLowerCase();
+          if (notesLower.includes('سداد') || notesLower.includes('debt') || notesLower.includes('settlement')) {
+            prefix = 'tx_debt';
+          } else if (notesLower.includes('إيداع') || notesLower.includes('deposit') || notesLower.includes('man_') || notesLower.includes('يدوي')) {
+            prefix = 'tx_man';
+          }
+
+          const invoiceNo = inv ? (inv.pcInvoiceId || inv.invoiceNumber || String(inv.id)) : '';
+          const txId = item.pcTxId || (item.id && item.id !== item.invoiceId
+            ? `${prefix}_${item.invoiceId}_${item.id}`
+            : `${prefix}_${item.invoiceId}`);
+
+          importedTransactions.push({
+            id: txId,
+            productId: item.pcProductId || `prod_${item.productId}`,
+            type: 'OUT',
+            quantity: item.quantity || 0,
+            unitPrice: item.unitPrice || 0,
+            date: invDate,
+            notes: invNotes ? (invNotes.includes('#') ? invNotes : `${invNotes} #${invoiceNo}`) : `#${invoiceNo}`,
+            customerId: inv?.pcCustomerId || custId,
+            warehouseId: item.pcWarehouseId || (item.warehouseId ? `wh_${item.warehouseId}` : 'wh_1'),
+            paymentMethod: pm,
+            cashierId: inv?.pcCashierId || (inv?.createdByUserId ? `${inv.createdByUserId}` : undefined)
+          });
+        });
+      }
+
+      // Map purchase invoices items
+      if (Array.isArray(parsedMobileData.purchaseItems) && Array.isArray(parsedMobileData.purchaseInvoices)) {
+        parsedMobileData.purchaseItems.forEach((item: any) => {
+          const inv = parsedMobileData.purchaseInvoices.find((i: any) => i.id === item.invoiceId);
+          const invDate = inv ? new Date(inv.date).toISOString() : new Date().toISOString();
+          const invNotes = inv ? inv.notes : '';
+          const suppId = inv && inv.supplierId ? `sup_${inv.supplierId}` : undefined;
+
+          // Payment method mapping
+          let pm = 'CASH';
+          if (inv) {
+            const methodUpper = (inv.paymentMethod || '').toUpperCase();
+            if (methodUpper.includes('آجل') || methodUpper.includes('DEBT')) {
+              pm = 'DEBT';
+            } else if (methodUpper.includes('تقسيط') || methodUpper.includes('INSTALLMENT')) {
+              pm = 'INSTALLMENT';
+            } else if (methodUpper.includes('كارت') || methodUpper.includes('CARD') || methodUpper.includes('أمان') || methodUpper.includes('فوري') || methodUpper.includes('AMAN') || methodUpper.includes('FAWRY')) {
+              pm = 'CARD';
+            }
+          }
+
+          let prefix = 'tx_pur';
+          const notesLower = (invNotes || '').toLowerCase();
+          if (notesLower.includes('سحب') || notesLower.includes('withdrawal') || notesLower.includes('man_') || notesLower.includes('يدوي')) {
+            prefix = 'tx_man';
+          }
+
+          const invoiceNo = inv ? (inv.pcInvoiceId || inv.invoiceNumber || String(inv.id)) : '';
+          const txId = item.pcTxId || (item.id && item.id !== item.invoiceId
+            ? `${prefix}_${item.invoiceId}_${item.id}`
+            : `${prefix}_${item.invoiceId}`);
+
+          importedTransactions.push({
+            id: txId,
+            productId: item.pcProductId || `prod_${item.productId}`,
+            type: 'IN',
+            quantity: item.quantity || 0,
+            unitPrice: item.unitPrice || 0,
+            date: invDate,
+            notes: invNotes ? (invNotes.includes('#') ? invNotes : `${invNotes} #${invoiceNo}`) : `#${invoiceNo}`,
+            supplierId: inv?.pcSupplierId || suppId,
+            warehouseId: item.pcWarehouseId || (item.warehouseId ? `wh_${item.warehouseId}` : 'wh_1'),
+            paymentMethod: pm,
+            cashierId: inv?.pcCashierId || (inv?.createdByUserId ? `${inv.createdByUserId}` : undefined)
+          });
+        });
+      }
+
+      // Map sales returns items
+      if (Array.isArray(parsedMobileData.salesReturnItems) && Array.isArray(parsedMobileData.salesReturns)) {
+        parsedMobileData.salesReturnItems.forEach((item: any) => {
+          const ret = parsedMobileData.salesReturns.find((r: any) => r.id === item.returnId);
+          const retDate = ret ? new Date(ret.date).toISOString() : new Date().toISOString();
+          const retNotes = ret ? ret.notes : '';
+          const custId = ret && ret.customerId ? `cust_${ret.customerId}` : undefined;
+
+          importedTransactions.push({
+            id: `tx_ret_sale_${item.id}`,
+            productId: `prod_${item.productId}`,
+            type: 'SALE_RETURN',
+            quantity: item.quantity || 0,
+            unitPrice: item.unitPrice || 0,
+            date: retDate,
+            notes: retNotes || '',
+            customerId: custId,
+            warehouseId: item.warehouseId ? `wh_${item.warehouseId}` : 'wh_1',
+            paymentMethod: 'CASH',
+            cashierId: ret?.createdByUserId ? `${ret.createdByUserId}` : undefined
+          });
+        });
+      }
+
+      // Map purchase returns items
+      if (Array.isArray(parsedMobileData.purchaseReturnItems) && Array.isArray(parsedMobileData.purchaseReturns)) {
+        parsedMobileData.purchaseReturnItems.forEach((item: any) => {
+          const ret = parsedMobileData.purchaseReturns.find((r: any) => r.id === item.returnId);
+          const retDate = ret ? new Date(ret.date).toISOString() : new Date().toISOString();
+          const retNotes = ret ? ret.notes : '';
+          const suppId = ret && ret.supplierId ? `sup_${ret.supplierId}` : undefined;
+
+          importedTransactions.push({
+            id: `tx_ret_pur_${item.id}`,
+            productId: `prod_${item.productId}`,
+            type: 'PURCHASE_RETURN',
+            quantity: item.quantity || 0,
+            unitPrice: item.unitPrice || 0,
+            date: retDate,
+            notes: retNotes || '',
+            supplierId: suppId,
+            warehouseId: item.warehouseId ? `wh_${item.warehouseId}` : 'wh_1',
+            paymentMethod: 'CASH',
+            cashierId: ret?.createdByUserId ? `${ret.createdByUserId}` : undefined
+          });
+        });
+      }
+
+      // 8. Map customerPayments and supplierPayments into vouchers
+      const importedVouchers: FinancialVoucher[] = [];
+      if (Array.isArray(parsedMobileData.customerPayments)) {
+        parsedMobileData.customerPayments.forEach((cp: any) => {
+          let pm: 'CASH' | 'BANK' | 'CHECK' | 'SETTLEMENT' = 'CASH';
+          const methodUpper = (cp.paymentMethod || '').toUpperCase();
+          if (methodUpper.includes('BANK') || methodUpper.includes('محفظة') || methodUpper.includes('CARD') || methodUpper.includes('E_WALLET') || methodUpper.includes('أمان') || methodUpper.includes('فوري')) {
+            pm = 'BANK';
+          } else if (methodUpper.includes('شيك') || methodUpper.includes('CHEQUE') || methodUpper.includes('CHECK')) {
+            pm = 'CHECK';
+          } else if (methodUpper.includes('SETTLEMENT') || methodUpper.includes('تسوية')) {
+            pm = 'SETTLEMENT';
+          }
+
+          importedVouchers.push({
+            id: `v_cust_${cp.id}`,
+            voucherNumber: `VOUCH-CUST-${cp.id}`,
+            type: 'RECEIPT',
+            partyType: 'CUSTOMER',
+            partyId: cp.customerId ? `cust_${cp.customerId}` : undefined,
+            amount: cp.amount || 0,
+            date: cp.date ? new Date(cp.date).toISOString() : new Date().toISOString(),
+            paymentMethod: pm,
+            notes: cp.notes || '',
+            createdBy: cp.createdByName || ''
+          });
+        });
+      }
+
+      if (Array.isArray(parsedMobileData.supplierPayments)) {
+        parsedMobileData.supplierPayments.forEach((sp: any) => {
+          let pm: 'CASH' | 'BANK' | 'CHECK' | 'SETTLEMENT' = 'CASH';
+          const methodUpper = (sp.paymentMethod || '').toUpperCase();
+          if (methodUpper.includes('BANK') || methodUpper.includes('محفظة') || methodUpper.includes('CARD') || methodUpper.includes('E_WALLET') || methodUpper.includes('أمان') || methodUpper.includes('فوري')) {
+            pm = 'BANK';
+          } else if (methodUpper.includes('شيك') || methodUpper.includes('CHEQUE') || methodUpper.includes('CHECK')) {
+            pm = 'CHECK';
+          } else if (methodUpper.includes('SETTLEMENT') || methodUpper.includes('تسوية')) {
+            pm = 'SETTLEMENT';
+          }
+
+          importedVouchers.push({
+            id: `v_sup_${sp.id}`,
+            voucherNumber: `VOUCH-SUP-${sp.id}`,
+            type: 'PAYMENT',
+            partyType: 'SUPPLIER',
+            partyId: sp.supplierId ? `sup_${sp.supplierId}` : undefined,
+            amount: sp.amount || 0,
+            date: sp.date ? new Date(sp.date).toISOString() : new Date().toISOString(),
+            paymentMethod: pm,
+            notes: sp.notes || '',
+            createdBy: sp.createdByName || ''
+          });
+        });
+      }
+
+      // 9. Map salesInvoices into invoices
+      const importedInvoices: Invoice[] = [];
+      if (Array.isArray(parsedMobileData.salesInvoices)) {
+        parsedMobileData.salesInvoices.forEach((si: any) => {
+          const itemsForInv = Array.isArray(parsedMobileData.salesItems) 
+            ? parsedMobileData.salesItems.filter((it: any) => it.invoiceId === si.id) 
+            : [];
+          
+          let pm: 'CASH' | 'CARD' | 'DEBT' | 'INSTALLMENT' = 'CASH';
+          const methodUpper = (si.paymentMethod || '').toUpperCase();
+          if (methodUpper.includes('آجل') || methodUpper.includes('DEBT')) {
+            pm = 'DEBT';
+          } else if (methodUpper.includes('تقسيط') || methodUpper.includes('INSTALLMENT')) {
+            pm = 'INSTALLMENT';
+          } else if (methodUpper.includes('كارت') || methodUpper.includes('CARD') || methodUpper.includes('أمان') || methodUpper.includes('فوري') || methodUpper.includes('AMAN') || methodUpper.includes('FAWRY')) {
+            pm = 'CARD';
+          }
+
+          importedInvoices.push({
+            id: si.pcInvoiceId || si.invoiceNumber || `inv_${si.id}`,
+            invoiceNo: si.pcInvoiceId || si.invoiceNumber || `${si.id}`,
+            customerName: si.customerName || 'عميل نقدي',
+            customerPhone: si.customerPhone || '',
+            customerId: si.customerId ? `cust_${si.customerId}` : undefined,
+            date: si.date ? new Date(si.date).toISOString() : new Date().toISOString(),
+            paymentMethod: pm,
+            discount: si.discountAmount || 0,
+            subtotal: si.subtotal || 0,
+            total: si.totalAmount || 0,
+            cashierId: si.createdByUserId ? `${si.createdByUserId}` : undefined,
+            items: itemsForInv.map((it: any) => ({
+              id: `inv_item_${it.id}`,
+              name: it.productName || (it.itemType === 'SERVICE' ? 'صيانة' : 'منتج'),
+              type: it.itemType === 'SERVICE' ? 'service' : 'product',
+              productId: it.productId ? `prod_${it.productId}` : undefined,
+              serviceId: it.itemType === 'SERVICE' ? `srv_${it.productId}` : undefined,
+              quantity: it.quantity || 1,
+              unitPrice: it.unitPrice || 0
+            }))
+          });
+        });
+      }
+
+      // 10. Map services
+      const importedServices: ProfessionalService[] = [];
+      if (Array.isArray(parsedMobileData.services)) {
+        parsedMobileData.services.forEach((srv: any) => {
+          importedServices.push({
+            id: `srv_${srv.id}`,
+            name: srv.name || 'خدمة صيانة',
+            type: 'maintenance',
+            price: srv.salePrice || 0,
+            cost: srv.costPrice || 0,
+            dateReceived: srv.createdAt ? new Date(srv.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+            dateDelivery: srv.updatedAt ? new Date(srv.updatedAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+            status: srv.isActive ? 'COMPLETED' : 'DELIVERED',
+            description: srv.description || srv.notes || '',
+          });
+        });
+      }
+
+      // 11. Map transfers
+      const importedTransfers: WarehouseTransfer[] = [];
+      if (Array.isArray(parsedMobileData.transfers)) {
+        parsedMobileData.transfers.forEach((tr: any) => {
+          const tItems = Array.isArray(parsedMobileData.transferItems)
+            ? parsedMobileData.transferItems.filter((ti: any) => ti.transferId === tr.id)
+            : [];
+          
+          tItems.forEach((ti: any) => {
+            importedTransfers.push({
+              id: `tr_${tr.id}_${ti.id}`,
+              productId: `prod_${ti.productId}`,
+              fromWarehouseId: `wh_${tr.fromWarehouseId || 1}`,
+              toWarehouseId: `wh_${tr.toWarehouseId || 1}`,
+              quantity: ti.quantity || 0,
+              date: tr.date ? new Date(tr.date).toISOString() : new Date().toISOString(),
+              notes: tr.notes || '',
+              performedBy: tr.createdByName || '',
+              performedById: tr.createdByUserUuid || ''
+            });
+          });
+        });
+      }
+
+      // 12. Parse Settings
+      if (parsedMobileData.settings) {
+        const s = parsedMobileData.settings;
+        if (s.storeName && setCompanyName) setCompanyName(s.storeName);
+        if (s.projectPhone && setCompanyPhone) setCompanyPhone(s.projectPhone);
+        if (s.projectAbout && setCompanyAddress) setCompanyAddress(s.projectAbout);
+      }
+
+      // Apply states based on mode
+      if (mode === 'overwrite') {
+        setWarehouses(importedWarehouses);
+        setCustomers(importedCustomers);
+        setSuppliers(importedSuppliers);
+        if (setCategories) setCategories(importedCategories);
+        setProducts(importedProducts);
+        setExpenses(importedExpenses);
+        setTransactions(importedTransactions);
+        if (setVouchers) setVouchers(importedVouchers);
+        if (setInvoices) setInvoices(importedInvoices);
+        setServices(importedServices);
+        setTransfers(importedTransfers);
+        
+        showToast(
+          language === 'ar' 
+            ? 'تمت تهيئة النظام واستبدال الداتا بالكامل بنجاح من ملف النسخة الاحتياطية!' 
+            : 'Full restore and clone completed successfully from the backup file!', 
+          'success'
+        );
+      } else if (mode === 'merge') {
+        setWarehouses(prev => {
+          const existingIds = new Set(prev.map(w => String(w.id)));
+          const filtered = importedWarehouses.filter(w => !existingIds.has(String(w.id)));
+          return [...prev, ...filtered];
+        });
+        setCustomers(prev => {
+          const existingIds = new Set(prev.map(c => String(c.id)));
+          const filtered = importedCustomers.filter(c => !existingIds.has(String(c.id)));
+          return [...prev, ...filtered];
+        });
+        setSuppliers(prev => {
+          const existingIds = new Set(prev.map(s => String(s.id)));
+          const filtered = importedSuppliers.filter(s => !existingIds.has(String(s.id)));
+          return [...prev, ...filtered];
+        });
+        if (setCategories) {
+          setCategories(prev => {
+            const existingIds = new Set(prev.map(c => String(c.id)));
+            const filtered = importedCategories.filter(c => !existingIds.has(String(c.id)));
+            return [...prev, ...filtered];
+          });
+        }
+        setProducts(prev => {
+          const existingIds = new Set(prev.map(p => String(p.id)));
+          const filtered = importedProducts.filter(p => !existingIds.has(String(p.id)));
+          return [...prev, ...filtered];
+        });
+        setExpenses(prev => {
+          const existingIds = new Set(prev.map(e => String(e.id)));
+          const filtered = importedExpenses.filter(e => !existingIds.has(String(e.id)));
+          return [...prev, ...filtered];
+        });
+        setTransactions(prev => {
+          const existingIds = new Set(prev.map(t => String(t.id)));
+          const existingSigs = new Set(prev.map(t => getTxSignature(t)));
+          const filtered = importedTransactions.filter(t => 
+            !existingIds.has(String(t.id)) && !existingSigs.has(getTxSignature(t))
+          );
+          return [...prev, ...filtered];
+        });
+        if (setVouchers) {
+          setVouchers(prev => {
+            const existingIds = new Set(prev.map(v => String(v.id)));
+            const filtered = importedVouchers.filter(v => !existingIds.has(String(v.id)));
+            return [...prev, ...filtered];
+          });
+        }
+        if (setInvoices) {
+          setInvoices(prev => {
+            const existingIds = new Set(prev.map(inv => String(inv.id).trim().toUpperCase()));
+            const existingNos = new Set(prev.map(inv => inv.invoiceNo ? String(inv.invoiceNo).trim().toUpperCase() : ''));
+            const filtered = importedInvoices.filter(inv => {
+              if (!inv || !inv.id) return false;
+              const idStr = String(inv.id).trim().toUpperCase();
+              const noStr = inv.invoiceNo ? String(inv.invoiceNo).trim().toUpperCase() : '';
+              return !existingIds.has(idStr) && (!noStr || !existingNos.has(noStr));
+            });
+            return [...prev, ...filtered];
+          });
+        }
+        setServices(prev => {
+          const existingIds = new Set(prev.map(srv => String(srv.id)));
+          const filtered = importedServices.filter(srv => !existingIds.has(String(srv.id)));
+          return [...prev, ...filtered];
+        });
+        setTransfers(prev => {
+          const existingIds = new Set(prev.map(tr => String(tr.id)));
+          const filtered = importedTransfers.filter(tr => !existingIds.has(String(tr.id)));
+          return [...prev, ...filtered];
+        });
+
+        showToast(
+          language === 'ar'
+            ? 'تم دمج وتحديث البيانات المشتركة والجديدة مع الحفاظ على سجلاتك الحالية!'
+            : 'Data merged with current database records seamlessly!',
+          'success'
+        );
+      } else if (mode === 'update') {
+        setProducts(prev => prev.map(p => {
+          const matched = importedProducts.find(ip => ip.id === p.id);
+          if (matched) {
+            return {
+              ...p,
+              quantity: matched.quantity,
+              costPrice: matched.costPrice,
+              sellingPrice: matched.sellingPrice,
+              code: matched.code
+            };
+          }
+          return p;
+        }));
+
+        setCustomers(prev => prev.map(c => {
+          const matched = importedCustomers.find(ic => ic.id === c.id);
+          if (matched) {
+            return { ...c, balance: matched.balance, phone: matched.phone || c.phone };
+          }
+          return c;
+        }));
+
+        setSuppliers(prev => prev.map(s => {
+          const matched = importedSuppliers.find(is => is.id === s.id);
+          if (matched) {
+            return { ...s, balance: matched.balance, phone: matched.phone || s.phone };
+          }
+          return s;
+        }));
+
+        showToast(
+          language === 'ar'
+            ? 'تم تحديث كميات المخزون والأسعار وبيانات العملاء الحالية فقط!'
+            : 'Updated stock quantities, pricing guidelines, and client listings successfully!',
+          'success'
+        );
+      }
+      setParsedMobileData(null);
+      setImportStats(null);
+      playBeep('success');
+    } catch (err) {
+      console.error(err);
+      showToast(language === 'ar' ? 'فشل معالجة ودمج الداتا' : 'Failed to process mobile database state', 'error');
+      playBeep('error');
+    }
+  };
+
+  // Convert PC React Application State back into Mobile JSON Schema formats
+  const handleExportMobileData = () => {
+    try {
+      const mobileJson: any = {
+        warehouses: warehouses.map(w => {
+          const idNum = deterministicIdToInteger(w.id);
+          return {
+            id: idNum,
+            name: w.name,
+            description: w.location || '',
+            notes: '',
+            createdAt: Date.now(),
+            status: 'ACTIVE',
+            minStockLimit: 0.0
+          };
+        }),
+        products: products.map(p => {
+          const idNum = deterministicIdToInteger(p.id);
+          const cat = categories.find(c => c.id === p.categoryId);
+          const catName = cat ? cat.name : 'عام';
+          const margin = p.sellingPrice - p.costPrice;
+          const percentage = p.sellingPrice > 0 ? (margin / p.sellingPrice) * 100 : 0;
+          return {
+            id: idNum,
+            name: p.name,
+            description: p.description || '',
+            category: catName,
+            barcode: p.code,
+            barcodeType: 'CODE128',
+            purchasePrice: p.costPrice,
+            salePrice: p.sellingPrice,
+            minStock: p.minQuantity,
+            averageCost: p.costPrice,
+            profitMargin: margin,
+            profitPercentage: percentage,
+            unit: 'حبة',
+            status: 'ACTIVE'
+          };
+        }),
+        productStocks: products.map(p => {
+          const pIdNum = deterministicIdToInteger(p.id);
+          const wIdNum = p.warehouseId ? deterministicIdToInteger(p.warehouseId) : 1;
+          return {
+            warehouseId: wIdNum,
+            productId: pIdNum,
+            quantity: p.quantity
+          };
+        }),
+        customers: customers.map(c => {
+          const idNum = deterministicIdToInteger(c.id);
+          return {
+            id: idNum,
+            name: c.name,
+            phone: c.phone || '',
+            address: c.address || '',
+            notes: '',
+            openingBalance: c.balance,
+            openingBalanceType: c.balance >= 0 ? 'مدين' : 'دائن',
+            status: 'ACTIVE'
+          };
+        }),
+        suppliers: suppliers.map(s => {
+          const idNum = deterministicIdToInteger(s.id);
+          return {
+            id: idNum,
+            name: s.name,
+            phone: s.phone || '',
+            address: s.address || '',
+            notes: '',
+            openingBalance: s.balance || 0,
+            openingBalanceType: (s.balance || 0) >= 0 ? 'مدين' : 'دائن',
+            status: 'ACTIVE'
+          };
+        }),
+        salesInvoices: [],
+        salesItems: [],
+        purchaseInvoices: [],
+        purchaseItems: [],
+        transfers: [],
+        transferItems: [],
+        settings: {
+          id: 1,
+          storeName: 'مخازني',
+          taxPercentage: 0.0,
+          currency: 'ج.م',
+          isAutoLock: false,
+          printerMacAddress: '74:40:BB:74:BC:A6',
+          printerPaperSize: 0,
+          printerFontSize: 14,
+          printerPrintLogo: true,
+          printerPrintQr: true,
+          printerPrintBarcode: true,
+          printerCopies: 1,
+          printerFeedLines: 1,
+          printerAutoCut: false,
+          defaultDiscountPercentage: 0.0,
+          projectAbout: '',
+          projectPhone: '',
+          showAboutInInvoice: false,
+          showPhoneInInvoice: false,
+          salesInvoiceStartNumber: 1,
+          purchaseInvoiceStartNumber: 1
+        },
+        activityLogs: [],
+        expenses: expenses.map((e) => {
+          const idNum = deterministicIdToInteger(e.id);
+          return {
+            id: idNum,
+            category: e.category === 'utilities' ? 'كهرباء' : 'مصروف',
+            amount: e.amount,
+            date: new Date(e.date).getTime(),
+            notes: e.notes || '',
+            paymentMethod: 'كاش'
+          };
+        }),
+        salesReturns: [],
+        salesReturnItems: [],
+        purchaseReturns: [],
+        purchaseReturnItems: [],
+        customerPayments: [],
+        supplierPayments: [],
+        productUnits: [{ name: 'حبة' }],
+        installments: [],
+        installmentSchedules: [],
+        capitalDeposits: [],
+        paymentMethods: [
+          {
+            id: 1,
+            name: 'كاش',
+            type: 'CASH',
+            affectsTreasury: true,
+            affectsBank: false,
+            createsCustomerReceivable: false,
+            createsSupplierPayable: false,
+            allowsPartialPayment: true,
+            linkedFinancialAccount: 'الصندوق الرئيس',
+            displayOrder: 1,
+            isActive: true
+          }
+        ],
+        accountTransactions: [],
+        stockMovements: [],
+        productSubUnits: [],
+        services: [],
+        serviceCategories: [],
+        serviceHistories: [],
+        serviceStatistics: {
+          id: 1,
+          totalServicesCount: 0,
+          totalSalesAmount: 0,
+          totalProfitAmount: 0,
+          totalServicesSold: 0,
+          topRequestedService: '',
+          lastServiceSaleDate: Date.now()
+        }
+      };
+
+      // Map OUT transactions to salesInvoices and salesItems
+      let salesIdx = 1;
+      let salesItemIdx = 1;
+      const salesTx = transactions.filter(t => t.type === 'OUT');
+      salesTx.forEach(tx => {
+        const txIdNum = deterministicIdToInteger(tx.id);
+        const cIdNum = tx.customerId ? deterministicIdToInteger(tx.customerId) : 1;
+        const cName = customers.find(c => c.id === tx.customerId)?.name || 'عميل نقدي';
+        const pIdNum = deterministicIdToInteger(tx.productId);
+        const pName = products.find(p => p.id === tx.productId)?.name || 'منتج';
+        const total = tx.quantity * tx.unitPrice;
+
+        mobileJson.salesInvoices.push({
+          id: txIdNum,
+          invoiceNumber: String(txIdNum),
+          date: new Date(tx.date).getTime(),
+          customerId: cIdNum,
+          customerName: cName,
+          taxPercentage: 0.0,
+          taxAmount: 0.0,
+          subtotal: total,
+          totalAmount: total,
+          notes: tx.notes || '',
+          discountPercentage: 0.0,
+          discountAmount: 0.0,
+          paymentMethod: 'كاش',
+          paidAmount: total,
+          remainingAmount: 0.0
+        });
+
+        mobileJson.salesItems.push({
+          id: salesItemIdx++,
+          invoiceId: txIdNum,
+          productId: pIdNum,
+          productName: pName,
+          quantity: tx.quantity,
+          unitPrice: tx.unitPrice,
+          totalPrice: total,
+          warehouseId: tx.warehouseId ? deterministicIdToInteger(tx.warehouseId) : 1,
+          itemType: 'PRODUCT'
+        });
+
+        salesIdx++;
+      });
+
+      // Map IN transactions to purchaseInvoices and purchaseItems
+      let purIdx = 1;
+      let purItemIdx = 1;
+      const purTx = transactions.filter(t => t.type === 'IN');
+      purTx.forEach(tx => {
+        const txIdNum = deterministicIdToInteger(tx.id);
+        const sIdNum = tx.supplierId ? deterministicIdToInteger(tx.supplierId) : 1;
+        const sName = suppliers.find(s => s.id === tx.supplierId)?.name || 'مورد افتراضي';
+        const pIdNum = deterministicIdToInteger(tx.productId);
+        const pName = products.find(p => p.id === tx.productId)?.name || 'منتج';
+        const total = tx.quantity * tx.unitPrice;
+
+        mobileJson.purchaseInvoices.push({
+          id: txIdNum,
+          invoiceNumber: String(txIdNum),
+          date: new Date(tx.date).getTime(),
+          supplierId: sIdNum,
+          supplierName: sName,
+          taxPercentage: 0.0,
+          taxAmount: 0.0,
+          subtotal: total,
+          totalAmount: total,
+          notes: tx.notes || '',
+          discountPercentage: 0.0,
+          discountAmount: 0.0,
+          paymentMethod: 'كاش',
+          paidAmount: total,
+          remainingAmount: 0.0
+        });
+
+        mobileJson.purchaseItems.push({
+          id: purItemIdx++,
+          invoiceId: txIdNum,
+          productId: pIdNum,
+          productName: pName,
+          quantity: tx.quantity,
+          unitPrice: tx.unitPrice,
+          totalPrice: total,
+          warehouseId: tx.warehouseId ? deterministicIdToInteger(tx.warehouseId) : 1,
+          itemType: 'PRODUCT'
+        });
+
+        purIdx++;
+      });
+
+      // Create download links
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(mobileJson, null, 2));
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.setAttribute("href", dataStr);
+      downloadAnchor.setAttribute("download", `erp_mobile_sync_${Date.now()}.json`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+
+      showToast(
+        language === 'ar'
+          ? 'تم تحويل وتصدير ملف التوافق بالكامل وتنزيله بنجاح!'
+          : 'Database fully compiled and exported in mobile-compatible format!',
+        'success'
+      );
+      playBeep('success');
+    } catch (err) {
+      console.error(err);
+      showToast(language === 'ar' ? 'فشل تصدير ملف المزامنة والنسخ الاحتياطي' : 'Failed to compile and export mobile backup file', 'error');
+      playBeep('error');
+    }
+  };
+
+  // --- FIREBASE REALTIME DATABASE SYNC SYSTEM ---
+  return { parsedMobileData, importStats, importMode, setImportMode, handleMobileFileChange, handleImportMobileData, handleExportMobileData };
+}

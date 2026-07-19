@@ -1,0 +1,29 @@
+import { useMemo } from 'react';
+import type { Expense, FinancialVoucher, TeamMember, Transaction } from '../../../types';
+
+export function useTreasuryBalance(transactions: Transaction[], expenses: Expense[], vouchers: FinancialVoucher[], currentUser: TeamMember) {
+  return useMemo(() => {
+    let balance = 0;
+    const filteredTxs = transactions.filter(tx => {
+      if (currentUser.role === 'admin') return true;
+      if (currentUser.role === 'cashier') return tx.cashierId === currentUser.id;
+      return false;
+    });
+    filteredTxs.forEach(tx => {
+      const method = tx.paymentMethod || 'CASH';
+      const isCashOrCard = method === 'CASH' || method === 'CARD';
+      if (tx.type === 'OUT' && isCashOrCard) balance += tx.quantity * tx.unitPrice;
+      else if (tx.type === 'IN' && method === 'CASH') balance -= tx.quantity * tx.unitPrice;
+      else if (tx.type === 'SALE_RETURN' && method === 'CASH') balance -= tx.quantity * tx.unitPrice;
+      else if (tx.type === 'PURCHASE_RETURN' && method === 'CASH') balance += tx.quantity * tx.unitPrice;
+      else if (tx.type === 'SAFE_DEPOSIT') balance += tx.quantity * tx.unitPrice;
+      else if (tx.type === 'SAFE_WITHDRAWAL') balance -= tx.quantity * tx.unitPrice;
+    });
+    if (currentUser.role === 'admin') expenses.forEach(exp => { balance -= exp.amount; });
+    vouchers.forEach(v => {
+      if (v.paymentMethod === 'SETTLEMENT') return;
+      balance += v.type === 'RECEIPT' ? v.amount : -v.amount;
+    });
+    return balance;
+  }, [transactions, expenses, vouchers, currentUser]);
+}

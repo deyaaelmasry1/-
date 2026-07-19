@@ -1,0 +1,122 @@
+import { useEffect, useState } from 'react';
+import type {
+  Expense,
+  Partner,
+  PartnerDistribution,
+  ProfessionalService,
+  Transaction,
+  Warehouse,
+  WarehouseTransfer,
+} from '../../../types';
+
+export function useEntityDetailModals() {
+  const [viewingTransaction, setViewingTransaction] = useState<Transaction | null>(null);
+  const [viewingExpense, setViewingExpense] = useState<Expense | null>(null);
+  const [viewingTransfer, setViewingTransfer] = useState<WarehouseTransfer | null>(null);
+  const [viewingPartner, setViewingPartner] = useState<Partner | null>(null);
+  const [viewingWarehouse, setViewingWarehouse] = useState<Warehouse | null>(null);
+  const [viewedServiceDetails, setViewedServiceDetails] = useState<ProfessionalService | null>(null);
+
+  const [isEditingTx, setIsEditingTx] = useState(false);
+  const [txEditQty, setTxEditQty] = useState(0);
+  const [txEditPrice, setTxEditPrice] = useState(0);
+  const [txEditNotes, setTxEditNotes] = useState('');
+  const [txEditDate, setTxEditDate] = useState('');
+
+  const [isEditingExp, setIsEditingExp] = useState(false);
+  const [expEditTitle, setExpEditTitle] = useState('');
+  const [expEditCategory, setExpEditCategory] = useState<Expense['category']>('other');
+  const [expEditAmount, setExpEditAmount] = useState(0);
+  const [expEditNotes, setExpEditNotes] = useState('');
+  const [expEditDate, setExpEditDate] = useState('');
+
+  const [isEditingTr, setIsEditingTr] = useState(false);
+  const [trEditQty, setTrEditQty] = useState(0);
+  const [trEditNotes, setTrEditNotes] = useState('');
+
+  const [isEditingPrt, setIsEditingPrt] = useState(false);
+  const [partnerEditName, setPartnerEditName] = useState('');
+  const [partnerEditEquity, setPartnerEditEquity] = useState(0);
+  const [partnerEditInvestment, setPartnerEditInvestment] = useState(0);
+  const [partnerEditNotes, setPartnerEditNotes] = useState('');
+
+  const [isEditingWh, setIsEditingWh] = useState(false);
+  const [whEditName, setWhEditName] = useState('');
+  const [whEditLocation, setWhEditLocation] = useState('');
+
+  const [viewingDistribution, setViewingDistribution] = useState<PartnerDistribution | null>(null);
+  const [isEditingDist, setIsEditingDist] = useState(false);
+  const [distEditAmount, setDistEditAmount] = useState(0);
+  const [distEditDate, setDistEditDate] = useState('');
+  const [distEditNotes, setDistEditNotes] = useState('');
+  const [distEditStatus, setDistEditStatus] = useState<PartnerDistribution['status']>('PAID');
+  const [distEditPartnerId, setDistEditPartnerId] = useState('all');
+
+  useEffect(() => {
+    if (!viewingTransaction) return;
+    setTxEditQty(viewingTransaction.quantity);
+    setTxEditPrice(viewingTransaction.unitPrice);
+    setTxEditNotes(viewingTransaction.notes || '');
+    setTxEditDate(viewingTransaction.date.split('T')[0]);
+    setIsEditingTx(false);
+  }, [viewingTransaction]);
+
+  useEffect(() => {
+    if (!viewingExpense) return;
+    setExpEditTitle(viewingExpense.title);
+    setExpEditCategory(viewingExpense.category);
+    setExpEditAmount(viewingExpense.amount);
+    setExpEditNotes(viewingExpense.notes || '');
+    setExpEditDate(viewingExpense.date.split('T')[0]);
+    setIsEditingExp(false);
+  }, [viewingExpense]);
+
+  useEffect(() => {
+    if (!viewingTransfer) return;
+    setTrEditQty(viewingTransfer.quantity);
+    setTrEditNotes(viewingTransfer.notes || '');
+    setIsEditingTr(false);
+  }, [viewingTransfer]);
+
+  useEffect(() => {
+    if (!viewingPartner) return;
+    setPartnerEditName(viewingPartner.name);
+    setPartnerEditEquity(viewingPartner.equityPercentage);
+    setPartnerEditInvestment(viewingPartner.investedAmount);
+    setPartnerEditNotes(viewingPartner.notes || '');
+    setIsEditingPrt(false);
+  }, [viewingPartner]);
+
+  useEffect(() => {
+    if (!viewingWarehouse) return;
+    setWhEditName(viewingWarehouse.name);
+    setWhEditLocation(viewingWarehouse.location || '');
+    setIsEditingWh(false);
+  }, [viewingWarehouse]);
+
+  useEffect(() => {
+    if (!viewingDistribution) return;
+    setDistEditAmount(viewingDistribution.amount);
+    setDistEditDate(viewingDistribution.date.split('T')[0]);
+    setDistEditNotes(viewingDistribution.notes || '');
+    setDistEditStatus(viewingDistribution.status);
+    setDistEditPartnerId(viewingDistribution.partnerId);
+    setIsEditingDist(false);
+  }, [viewingDistribution]);
+
+  return {
+    viewingTransaction, setViewingTransaction,
+    viewingExpense, setViewingExpense,
+    viewingTransfer, setViewingTransfer,
+    viewingPartner, setViewingPartner,
+    viewingWarehouse, setViewingWarehouse,
+    viewedServiceDetails, setViewedServiceDetails,
+    isEditingTx, setIsEditingTx, txEditQty, setTxEditQty, txEditPrice, setTxEditPrice, txEditNotes, setTxEditNotes, txEditDate, setTxEditDate,
+    isEditingExp, setIsEditingExp, expEditTitle, setExpEditTitle, expEditCategory, setExpEditCategory, expEditAmount, setExpEditAmount, expEditNotes, setExpEditNotes, expEditDate, setExpEditDate,
+    isEditingTr, setIsEditingTr, trEditQty, setTrEditQty, trEditNotes, setTrEditNotes,
+    isEditingPrt, setIsEditingPrt, partnerEditName, setPartnerEditName, partnerEditEquity, setPartnerEditEquity, partnerEditInvestment, setPartnerEditInvestment, partnerEditNotes, setPartnerEditNotes,
+    isEditingWh, setIsEditingWh, whEditName, setWhEditName, whEditLocation, setWhEditLocation,
+    viewingDistribution, setViewingDistribution,
+    isEditingDist, setIsEditingDist, distEditAmount, setDistEditAmount, distEditDate, setDistEditDate, distEditNotes, setDistEditNotes, distEditStatus, setDistEditStatus, distEditPartnerId, setDistEditPartnerId,
+  };
+}

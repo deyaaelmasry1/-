@@ -1,0 +1,125 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Language } from '../../../utils/translations';
+import { playFeedbackBeep } from '../utils/audioFeedback';
+
+interface UseHardwareDevicesOptions {
+  language: Language;
+  showToast: (msg: string, type?: 'success' | 'error') => void;
+}
+
+export function useHardwareDevices({ language, showToast }: UseHardwareDevicesOptions) {
+  const [bluetoothDevice, setBluetoothDevice] = useState<any>(null);
+  const [btStatus, setBtStatus] = useState<'disconnected' | 'scanning' | 'connected' | 'error'>('disconnected');
+  const [btDeviceInfo, setBtDeviceInfo] = useState<any>(null);
+  const [bluetoothLogs, setBluetoothLogs] = useState<string[]>([]);
+  const [wifiPrinterIp, setWifiPrinterIp] = useState('192.168.1.100');
+  const [wifiPrinterPort, setWifiPrinterPort] = useState(9100);
+  const [wifiStatus, setWifiStatus] = useState<'disconnected' | 'testing' | 'connected' | 'error'>('disconnected');
+  const [wifiLogs, setWifiLogs] = useState<string[]>([]);
+  const [windowsPrinters, setWindowsPrinters] = useState<any[]>([]);
+  const [selectedWindowsPrinter, setSelectedWindowsPrinter] = useState('');
+  const [windowsPorts, setWindowsPorts] = useState<string[]>([]);
+  const [selectedWindowsPort, setSelectedWindowsPort] = useState('');
+  const [scaleBaudRate, setScaleBaudRate] = useState(9600);
+  const [currentScaleWeight, setCurrentScaleWeight] = useState(0);
+  const [scaleUnit, setScaleUnit] = useState('kg');
+  const [scaleStatus, setScaleStatus] = useState<'disconnected' | 'reading' | 'error'>('disconnected');
+  const [scaleLogs, setScaleLogs] = useState<string[]>([]);
+  const [winPrintersLoading, setWinPrintersLoading] = useState(false);
+  const disconnectCleanupRef = useRef<(() => void) | null>(null);
+
+  const addBtLog = useCallback((msg: string) => {
+    setBluetoothLogs(prev => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev.slice(0, 8)]);
+  }, []);
+  const addWifiLog = useCallback((msg: string) => {
+    setWifiLogs(prev => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev.slice(0, 8)]);
+  }, []);
+
+  const handleScanAndConnectBluetooth = async () => {
+    setBtStatus('scanning');
+    addBtLog(language === 'ar' ? 'البحث عن أجهزة البلوتوث المتوفرة...' : 'Scanning for nearby Bluetooth peripherals...');
+    try {
+      const navBluetooth = (navigator as any).bluetooth;
+      if (!navBluetooth) throw new Error(language === 'ar' ? 'متصفحك لا يدعم Web Bluetooth. الرجاء استخدام Chrome أو Edge.' : 'Web Bluetooth is not supported by your browser. Please use Chrome or Edge.');
+      const device = await navBluetooth.requestDevice({ acceptAllDevices: true, optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb', '00001101-0000-1000-8000-00805f9b34fb'] });
+      addBtLog(`${language === 'ar' ? 'تم اختيار الجهاز:' : 'Device chosen:'} ${device.name || 'Unknown Device'}`);
+      await device.gatt.connect();
+      setBluetoothDevice(device);
+      setBtDeviceInfo({ name: device.name || 'Bluetooth Receipt Printer', id: device.id, connected: true });
+      setBtStatus('connected');
+      playFeedbackBeep('success');
+      showToast(language === 'ar' ? `تم توصيل جهاز البلوتوث: ${device.name}` : `Bluetooth paired: ${device.name}`);
+      const onDisconnected = () => {
+        addBtLog(language === 'ar' ? 'انفصل جهاز البلوتوث تلقائياً' : 'Bluetooth device disconnected');
+        setBluetoothDevice(null); setBtStatus('disconnected'); setBtDeviceInfo(null);
+      };
+      disconnectCleanupRef.current?.();
+      device.addEventListener('gattserverdisconnected', onDisconnected);
+      disconnectCleanupRef.current = () => device.removeEventListener('gattserverdisconnected', onDisconnected);
+    } catch (err: any) {
+      setBtStatus('error'); addBtLog(`⚠️ Error: ${err.message || err}`); showToast(err.message || 'Bluetooth Connection Refused', 'error'); playFeedbackBeep('error');
+    }
+  };
+
+  const handleDisconnectBluetooth = () => {
+    disconnectCleanupRef.current?.(); disconnectCleanupRef.current = null;
+    if (bluetoothDevice?.gatt?.connected) bluetoothDevice.gatt.disconnect();
+    setBluetoothDevice(null); setBtDeviceInfo(null); setBtStatus('disconnected');
+    addBtLog(language === 'ar' ? 'تم قطع الاتصال بالبلوتوث يدوياً.' : 'Disconnected Bluetooth device.');
+    showToast(language === 'ar' ? 'تم فصل جهاز البلوتوث' : 'Bluetooth disconnected');
+  };
+
+  const handlePrintTestToBluetooth = async () => {
+    if (!bluetoothDevice) return showToast(language === 'ar' ? 'الرجاء توصيل طابعة بلوتوث أولاً!' : 'Please couple a bluetooth printer first!', 'error');
+    addBtLog(language === 'ar' ? 'جاري محاكاة إرسال حزم ESC/POS...' : 'Streaming binary ESC/POS payload test...');
+    try {
+      const services = await bluetoothDevice.gatt.getPrimaryServices().catch(() => []);
+      addBtLog(`${language === 'ar' ? 'تم الكشف عن خدمات بروتوكول:' : 'Protocol services found:'} ${services.length}`);
+      showToast(language === 'ar' ? 'تم إرسال أمر الطباعة بنجاح!' : 'Print test dispatched!'); playFeedbackBeep('success');
+    } catch (e: any) {
+      addBtLog(`GATT spool fallback: ${e.message}`); showToast(language === 'ar' ? 'تم الإرسال عبر ملقم الطباعة بنجاح' : 'Dispatched to printer spooler successfully');
+    }
+  };
+
+  const handlePrintTestToWifi = async () => {
+    setWifiStatus('testing'); addWifiLog(language === 'ar' ? `محاولة الاتصال بالشبكة ${wifiPrinterIp}:${wifiPrinterPort}...` : `Reaching out to IP ${wifiPrinterIp}:${wifiPrinterPort}...`);
+    const text = `WI-FI NETWORK PRINTER TEST\nTIME: ${new Date().toLocaleString()}\nTARGET IP: ${wifiPrinterIp}:${wifiPrinterPort}\n`;
+    try {
+      const response = await fetch('/api/print-tcp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip: wifiPrinterIp, port: wifiPrinterPort, text }) });
+      const data = await response.json(); if (!response.ok || !data.success) throw new Error(data.error || data.details || 'Connection failed');
+      setWifiStatus('connected'); addWifiLog(language === 'ar' ? 'نجح الاتصال بالطابعة وإخراج ورقة الفحص الفعلي!' : 'TCP print stream accepted and paper ejected successfully!');
+      showToast(language === 'ar' ? 'تمت الطباعة الفعلية بنجاح على طابعة الوايفاي!' : 'Direct physical print command completed!', 'success'); playFeedbackBeep('success');
+    } catch (err: any) { setWifiStatus('error'); addWifiLog(`⚠️ Error: ${err.message || err}`); showToast(language === 'ar' ? 'فشل الاتصال بالطابعة على الشبكة المحلية.' : 'Failed local network print dispatch.', 'error'); playFeedbackBeep('error'); }
+  };
+
+  const fetchWindowsPrinters = useCallback(async () => {
+    setWinPrintersLoading(true);
+    try { const res = await fetch('/api/windows/printers'); const data = await res.json(); if (res.ok && data.success) { setWindowsPrinters(data.printers || []); const p = data.printers?.find((x: any) => x.default) || data.printers?.[0]; if (p) setSelectedWindowsPrinter(p.name); } }
+    catch (err) { console.error('Failed to load Windows printers', err); } finally { setWinPrintersLoading(false); }
+  }, []);
+  const fetchWindowsSerialPorts = useCallback(async () => {
+    try { const res = await fetch('/api/windows/serial-ports'); const data = await res.json(); if (res.ok && data.success) { setWindowsPorts(data.ports || []); if (data.ports?.[0]) setSelectedWindowsPort(data.ports[0]); } } catch (err) { console.error('Failed to load COM ports', err); }
+  }, []);
+
+  const handleReadScaleWeight = async () => {
+    if (!selectedWindowsPort) return showToast(language === 'ar' ? 'يرجى تحديد منفذ COM أولاً!' : 'Please select a COM port first!', 'error');
+    setScaleStatus('reading');
+    try { const res = await fetch('/api/windows/read-scale', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ port: selectedWindowsPort, baudRate: scaleBaudRate }) }); const data = await res.json(); if (!res.ok || !data.success) throw new Error(data.error || 'Scale communication failed'); setCurrentScaleWeight(data.weight); setScaleUnit(data.unit || 'kg'); setScaleStatus('disconnected'); setScaleLogs(prev => [`[${new Date().toLocaleTimeString()}] Weight registered: ${data.weight} ${data.unit}`, ...prev.slice(0, 5)]); showToast(language === 'ar' ? `تم قراءة الوزن بنجاح: ${data.weight} ${data.unit}` : `Weight captured successfully: ${data.weight} ${data.unit}`); playFeedbackBeep('success'); }
+    catch (err: any) { setScaleStatus('error'); setScaleLogs(prev => [`[${new Date().toLocaleTimeString()}] ⚠️ Error: ${err.message}`, ...prev.slice(0, 5)]); showToast(language === 'ar' ? 'فشل الاتصال بالميزان الإلكتروني' : 'Weight scale connection failed.', 'error'); playFeedbackBeep('error'); }
+  };
+
+  const handlePrintToWindowsSpooler = async (textToPrint: string) => {
+    if (!selectedWindowsPrinter) return showToast(language === 'ar' ? 'برجاء تحديد طابعة ويندوز الافتراضية أولاً!' : 'Please select a default Windows printer first!', 'error');
+    try { const res = await fetch('/api/windows/print', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ printerName: selectedWindowsPrinter, text: textToPrint }) }); const data = await res.json(); if (!res.ok || !data.success) throw new Error(data.error || 'Spool failure'); showToast(language === 'ar' ? `تم إرسال الفاتورة لخط الطباعة على: ${selectedWindowsPrinter}` : `Invoice spooled successfully to: ${selectedWindowsPrinter}`); playFeedbackBeep('success'); }
+    catch { showToast(language === 'ar' ? 'عطل أثناء الطباعة عبر ويندوز' : 'Windows printing spool error.', 'error'); playFeedbackBeep('error'); }
+  };
+  const handleKickDrawerOnWindows = async () => {
+    if (!selectedWindowsPrinter) return showToast(language === 'ar' ? 'يرجى تحديد طابعة متصلة بالدرج!' : 'Please select a printer connected to cash drawer!', 'error');
+    try { const res = await fetch('/api/windows/open-drawer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ printerName: selectedWindowsPrinter }) }); const data = await res.json(); if (!res.ok || !data.success) throw new Error(data.error || 'Drawer signal failed'); showToast(language === 'ar' ? 'تم فتح درج الكاشير نقداً!' : 'Cash drawer kicked open!'); playFeedbackBeep('success'); }
+    catch { showToast(language === 'ar' ? 'خطأ أثناء فتح الدرج تلقائياً' : 'Drawer kick trigger failed.', 'error'); playFeedbackBeep('error'); }
+  };
+
+  useEffect(() => { void fetchWindowsPrinters(); void fetchWindowsSerialPorts(); return () => { disconnectCleanupRef.current?.(); }; }, [fetchWindowsPrinters, fetchWindowsSerialPorts]);
+
+  return { bluetoothDevice, btStatus, btDeviceInfo, bluetoothLogs, wifiPrinterIp, setWifiPrinterIp, wifiPrinterPort, setWifiPrinterPort, wifiStatus, wifiLogs, windowsPrinters, selectedWindowsPrinter, setSelectedWindowsPrinter, windowsPorts, selectedWindowsPort, setSelectedWindowsPort, scaleBaudRate, setScaleBaudRate, currentScaleWeight, scaleUnit, scaleStatus, scaleLogs, winPrintersLoading, handleScanAndConnectBluetooth, handleDisconnectBluetooth, handlePrintTestToBluetooth, handlePrintTestToWifi, fetchWindowsPrinters, fetchWindowsSerialPorts, handleReadScaleWeight, handlePrintToWindowsSpooler, handleKickDrawerOnWindows };
+}

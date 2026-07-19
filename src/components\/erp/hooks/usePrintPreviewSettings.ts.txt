@@ -1,0 +1,77 @@
+import { useEffect, useState } from 'react';
+
+export type PrintPaperSize = 'A4' | 'Letter' | 'Thermal80' | 'Thermal58';
+export type PrintMargins = 'normal' | 'narrow' | 'wide' | 'none';
+export type PrintOrientation = 'portrait' | 'landscape';
+export type PrintColorMode = 'color' | 'mono';
+export type PrintLayout = 'standard' | 'thermal';
+
+export interface PhysicalPrinter {
+  name: string;
+  displayName: string;
+  description: string;
+  status: number;
+  isDefault: boolean;
+}
+
+export interface GeneralPrintPreview {
+  title: string;
+  subtitle: string;
+  contentHtml: string;
+  styleType?: string;
+}
+
+export function usePrintPreviewSettings() {
+  const [printLayout, setPrintLayout] = useState<PrintLayout>(() =>
+    (localStorage.getItem('store_print_layout') as PrintLayout) || 'standard'
+  );
+  const [generalPrintPreview, setGeneralPrintPreview] = useState<GeneralPrintPreview | null>(null);
+  const [printPrinter, setPrintPrinter] = useState('default');
+  const [physicalPrinters, setPhysicalPrinters] = useState<PhysicalPrinter[]>([]);
+  const [printCopies, setPrintCopies] = useState(1);
+  const [printOrientation, setPrintOrientation] = useState<PrintOrientation>('portrait');
+  const [printPaperSize, setPrintPaperSize] = useState<PrintPaperSize>('A4');
+  const [printMargins, setPrintMargins] = useState<PrintMargins>('normal');
+  const [printColor, setPrintColor] = useState<PrintColorMode>('color');
+  const [printScale, setPrintScale] = useState(100);
+  const [printShowHeader, setPrintShowHeader] = useState(true);
+  const [printShowFooter, setPrintShowFooter] = useState(true);
+
+  useEffect(() => {
+    localStorage.setItem('store_print_layout', printLayout);
+  }, [printLayout]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const getPrinters = window.electronAPI?.getPrinters;
+    if (!getPrinters) return;
+
+    getPrinters()
+      .then((printers) => {
+        if (cancelled) return;
+        setPhysicalPrinters(printers);
+        const defaultPrinter = printers.find((printer) => printer.isDefault);
+        if (defaultPrinter) setPrintPrinter(defaultPrinter.name);
+      })
+      .catch((error) => console.error('Failed to load physical printers:', error));
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return {
+    printLayout, setPrintLayout,
+    generalPrintPreview, setGeneralPrintPreview,
+    printPrinter, setPrintPrinter,
+    physicalPrinters,
+    printCopies, setPrintCopies,
+    printOrientation, setPrintOrientation,
+    printPaperSize, setPrintPaperSize,
+    printMargins, setPrintMargins,
+    printColor, setPrintColor,
+    printScale, setPrintScale,
+    printShowHeader, setPrintShowHeader,
+    printShowFooter, setPrintShowFooter,
+  };
+}

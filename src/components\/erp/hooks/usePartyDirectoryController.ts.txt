@@ -1,0 +1,78 @@
+import React, { useState } from 'react';
+import type { Customer, Supplier } from '../../../types';
+
+type Toast = (message: string, type?: 'success' | 'error' | 'info') => void;
+
+interface Options {
+  language: string;
+  setCustomers: React.Dispatch<React.SetStateAction<Customer[]>>;
+  setSuppliers: React.Dispatch<React.SetStateAction<Supplier[]>>;
+  showToast: Toast;
+  playBeep: (type: 'success' | 'error' | 'click') => void;
+}
+
+export function usePartyDirectoryController({ language, setCustomers, setSuppliers, showToast, playBeep }: Options) {
+  const [addCustomerName, setAddCustomerName] = useState('');
+  const [addCustomerPhone, setAddCustomerPhone] = useState('');
+  const [addCustomerEmail, setAddCustomerEmail] = useState('');
+  const [addCustomerAddress, setAddCustomerAddress] = useState('');
+  const [addCustomerInitialBalance, setAddCustomerInitialBalance] = useState(0);
+  const [addSupplierName, setAddSupplierName] = useState('');
+  const [addSupplierPhone, setAddSupplierPhone] = useState('');
+  const [addSupplierEmail, setAddSupplierEmail] = useState('');
+  const [addSupplierAddress, setAddSupplierAddress] = useState('');
+  const [addSupplierCompany, setAddSupplierCompany] = useState('');
+  const [addSupplierInitialBalance, setAddSupplierInitialBalance] = useState(0);
+  const [customerSearchQueryText, setCustomerSearchQueryText] = useState('');
+  const [supplierSearchQueryText, setSupplierSearchQueryText] = useState('');
+
+  const handleAddCustomerFromTab = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!addCustomerName.trim()) {
+      showToast(language === 'ar' ? 'يرجى إدخال اسم العميل!' : 'Please enter customer name!', 'error');
+      return;
+    }
+    const customer: Customer = {
+      id: `cust_${Date.now()}`,
+      name: addCustomerName.trim(),
+      phone: addCustomerPhone.trim() || undefined,
+      email: addCustomerEmail.trim() || undefined,
+      address: addCustomerAddress.trim() || undefined,
+      balance: addCustomerInitialBalance || 0,
+    };
+    setCustomers(previous => [...previous, customer]);
+    setAddCustomerName(''); setAddCustomerPhone(''); setAddCustomerEmail(''); setAddCustomerAddress(''); setAddCustomerInitialBalance(0);
+    showToast(language === 'ar' ? 'تمت إضافة العميل الجديد بنجاح!' : 'New customer added successfully!', 'success');
+    playBeep('success');
+  };
+
+  const handleAddSupplierFromTab = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!addSupplierName.trim()) {
+      showToast(language === 'ar' ? 'يرجى إدخال اسم المورد!' : 'Please enter supplier name!', 'error');
+      return;
+    }
+    const supplier: Supplier = {
+      id: `sup_${Date.now()}`,
+      name: addSupplierName.trim(),
+      phone: addSupplierPhone.trim() || undefined,
+      email: addSupplierEmail.trim() || undefined,
+      address: addSupplierAddress.trim() || undefined,
+      company: addSupplierCompany.trim() || undefined,
+      balance: addSupplierInitialBalance || 0,
+    };
+    setSuppliers(previous => [...previous, supplier]);
+    setAddSupplierName(''); setAddSupplierPhone(''); setAddSupplierEmail(''); setAddSupplierAddress(''); setAddSupplierCompany(''); setAddSupplierInitialBalance(0);
+    showToast(language === 'ar' ? 'تمت إضافة المورد الجديد بنجاح!' : 'New supplier added successfully!', 'success');
+    playBeep('success');
+  };
+
+  return {
+    addCustomerName, setAddCustomerName, addCustomerPhone, setAddCustomerPhone, addCustomerEmail, setAddCustomerEmail,
+    addCustomerAddress, setAddCustomerAddress, addCustomerInitialBalance, setAddCustomerInitialBalance,
+    addSupplierName, setAddSupplierName, addSupplierPhone, setAddSupplierPhone, addSupplierEmail, setAddSupplierEmail,
+    addSupplierAddress, setAddSupplierAddress, addSupplierCompany, setAddSupplierCompany,
+    addSupplierInitialBalance, setAddSupplierInitialBalance, customerSearchQueryText, setCustomerSearchQueryText,
+    supplierSearchQueryText, setSupplierSearchQueryText, handleAddCustomerFromTab, handleAddSupplierFromTab,
+  };
+}

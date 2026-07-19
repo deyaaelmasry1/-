@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ar">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>منظومة الرقابة المالية وإدارة المعارض والـ POS | Smart ERP Hub</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgcng9IjI4IiBmaWxsPSIjMGYxNzJhIiAvPjxyZWN0IHg9IjEwIiB5PSIxMCIgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzFlMjkzYiIgc3Ryb2tlLXdpZHRoPSIxIi8+PGNpcmNsZSBjeD0iNTAiIGN5PSI1MCIgcj0iMzgiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzMzNDE1NSIgc3Ryb2tlLXdpZHRoPSIxIiBzdHJva2UtZGFzaGFycmF5PSI0IDQiLz48cGF0aCBkPSJNNTAgMjIgTDc2IDM1IEw3NiA2NSBMNTAgNzggTDI0IDY1IEwyNCAzNSBaIiBmaWxsPSIjMWUxYjRiIiBvcGFjaXR5PSIwLjYiLz48cGF0aCBkPSJNNTAgMjIgTDUwIDc4IiBzdHJva2U9IiM0ZjQ2ZTUiIHN0cm9rZS13aWR0aD0iMiIgb3BhY2l0eT0iMC40Ii8+PHBhdGggZD0iTTI0IDM1IEw3NiA2NSIgc3Ryb2tlPSIjNGY0NmU1IiBzdHJva2Utd2lkdGg9IjIiIG9wYWNpdHk9IjAuNCIvPjxwYXRoIGQ9Ik03NiAzNSBMMjQgNjUiIHN0cm9rZT0iIzRmNDZlNSIgc3Ryb2tlLXdpZHRoPSIyIiBvcGFjaXR5PSIwLjQiLz48cG9seWdvbiBwb2ludHM9IjUwLDMwIDcwLDUwIDUwLDcwIDMwLDUwIiBmaWxsPSJ1cmwoI2dyYWQpIi8+PHBhdGggZD0iTTQyIDUwIEw0NyA1NSBMNTggNDMiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzEwYjk4MSIgc3Ryb2tlLXdpZHRoPSI2IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9ImdyYWQiIHgxPSIwJSIgeTE9IjAlIiB4Mj0iMTAwJSIgeTI9IjEwMCUiPjxzdG9wIG9mZnNldD0iMCUiIHN0b3AtY29sb3I9IiM2MzY2ZjEiIC8+PHN0b3Agb2Zmc2V0PSI1MCUiIHN0b3AtY29sb3I9IiM0ZjQ2ZTUiIC8+PHN0b3Agb2Zmc2V0PSIxMDAlIiBzdG9wLWNvbG9yPSIjM2I4MmY2IiAvPjwvbGluZWFyR3JhZGllbnQ+PC9kZWZzPjwvc3ZnPg==">
+    <script type="module" crossorigin src="/assets/index-BrdSe0CA.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/charts-7pOQm6Mk.js">
+    <link rel="modulepreload" crossorigin href="/assets/documents-Bhnlew-O.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-B9L5ETiY.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
+

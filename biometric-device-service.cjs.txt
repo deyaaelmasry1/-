@@ -1,0 +1,86 @@
+const net = require('net');
+const fs = require('fs');
+const path = require('path');
+
+function tcpProbe(host, port, timeoutMs=4000){
+  return new Promise((resolve,reject)=>{
+    const socket=new net.Socket(); let done=false;
+    const finish=(err,result)=>{if(done)return;done=true;socket.destroy();err?reject(err):resolve(result)};
+    socket.setTimeout(timeoutMs);
+    socket.once('connect',()=>finish(null,{ok:true,transport:'TCP',host,port}));
+    socket.once('timeout',()=>finish(new Error(`Connection timeout to ${host}:${port}`)));
+    socket.once('error',err=>finish(err));
+    socket.connect(port,host);
+  });
+}
+
+function normalizeRows(rows, device){
+  return (Array.isArray(rows)?rows:[]).map((r,i)=>({
+    id:r.id||`device_${device.id}_${Date.now()}_${i}`,
+    employeeId:String(r.employeeId??r.employee_id??r.userId??r.user_id??''),
+    employeeName:String(r.employeeName??r.employee_name??r.name??r.employeeId??r.employee_id??'موظف'),
+    eventType:String(r.eventType??r.event_type??'CHECK_IN').toUpperCase(),
+    eventTime:r.eventTime??r.event_time??r.timestamp??new Date().toISOString(),
+    source:`DEVICE:${device.device_type||device.deviceType||'GENERIC'}`,
+    deviceId:device.id,
+    notes:r.notes||null
+  })).filter(r=>r.employeeId);
+}
+
+function sdkBridgePath(device, userDataPath){
+  if(device.sdk_path && path.isAbsolute(device.sdk_path)) return device.sdk_path;
+  const vendor=String(device.device_type||device.deviceType||'generic').toLowerCase();
+  return path.join(userDataPath,'biometric-sdk',vendor,'bridge.cjs');
+}
+function loadSdkBridge(device,userDataPath){
+  const bridgePath=sdkBridgePath(device,userDataPath);
+  if(!fs.existsSync(bridgePath)) throw new Error(`SDK bridge not installed: ${bridgePath}`);
+  delete require.cache[require.resolve(bridgePath)];
+  const bridge=require(bridgePath);
+  if(!bridge || typeof bridge.testConnection!=='function') throw new Error('SDK bridge must export testConnection(device)');
+  return {bridge,bridgePath};
+}
+
+async function testDevice(device,{userDataPath}){
+  const mode=String(device.driver_mode||device.driverMode||device.connection_type||device.connectionType||'CSV').toUpperCase();
+  if(mode==='CSV') return {ok:true,mode:'CSV',message:'CSV import is ready; no live connection is required.'};
+  if(mode==='SDK'){
+    const {bridge,bridgePath}=loadSdkBridge(device,userDataPath);
+    const result=await bridge.testConnection(device);
+    return {ok:Boolean(result?.ok!==false),mode:'SDK',bridgePath,...result};
+  }
+  if(mode==='DIRECT' || mode==='NETWORK'){
+    if(!device.host) throw new Error('Device IP/host is required');
+    const port=Number(device.port)||4370;
+    const probe=await tcpProbe(device.host,port);
+    return {...probe,mode:'DIRECT',driver:String(device.device_type||'GENERIC').toUpperCase(),message:'Network transport is reachable. Record download depends on the selected direct driver.'};
+  }
+  throw new Error(`Unsupported biometric connection mode: ${mode}`);
+}
+
+async function fetchAttendance(device,{userDataPath}){
+  const mode=String(device.driver_mode||device.driverMode||device.connection_type||device.connectionType||'CSV').toUpperCase();
+  if(mode==='CSV') throw new Error('CSV devices are synchronized by importing a CSV file from the attendance screen.');
+  if(mode==='SDK'){
+    const {bridge}=loadSdkBridge(device,userDataPath);
+    if(typeof bridge.fetchAttendance!=='function') throw new Error('SDK bridge does not export fetchAttendance(device)');
+    return normalizeRows(await bridge.fetchAttendance(device),device);
+  }
+  if(mode==='DIRECT' || mode==='NETWORK'){
+    await testDevice(device,{userDataPath});
+    const vendor=String(device.device_type||device.deviceType||'GENERIC').toUpperCase();
+    if(vendor==='ZKTECO' || vendor==='RONALD_JACK'){
+      throw new Error('Direct network transport is reachable, but this model requires a tested ZKTeco-compatible protocol driver or vendor SDK bridge before attendance records can be downloaded safely.');
+    }
+    throw new Error(`No direct attendance parser is installed for ${vendor}. Install an SDK bridge or use CSV import.`);
+  }
+  throw new Error(`Unsupported biometric connection mode: ${mode}`);
+}
+
+function capabilities(device,{userDataPath}){
+  const mode=String(device.driver_mode||device.driverMode||device.connection_type||device.connectionType||'CSV').toUpperCase();
+  const bridgePath=sdkBridgePath(device,userDataPath);
+  return {mode,csv:true,direct:mode==='DIRECT'||mode==='NETWORK',sdk:mode==='SDK',sdkInstalled:fs.existsSync(bridgePath),bridgePath};
+}
+
+module.exports={testDevice,fetchAttendance,capabilities,normalizeRows,tcpProbe,sdkBridgePath};

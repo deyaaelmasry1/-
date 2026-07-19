@@ -1,0 +1,112 @@
+
+> react-example@1.0.0 quality
+> node scripts/quality-audit.cjs
+
+{
+  "files": 86,
+  "totalLines": 32998,
+  "largest": [
+    {
+      "file": "src/components/erp/runtime/ErpWorkspaceRuntime.tsx",
+      "lines": 12578,
+      "todos": 0
+    },
+    {
+      "file": "src/App.tsx",
+      "lines": 3249,
+      "todos": 0
+    },
+    {
+      "file": "src/components/Dashboard.tsx",
+      "lines": 1820,
+      "todos": 0
+    },
+    {
+      "file": "src/components/Reports.tsx",
+      "lines": 1631,
+      "todos": 0
+    },
+    {
+      "file": "src/components/Inventory.tsx",
+      "lines": 1503,
+      "todos": 0
+    },
+    {
+      "file": "src/components/PrintPreviewModal.tsx",
+      "lines": 958,
+      "todos": 0
+    },
+    {
+      "file": "src/components/Customers.tsx",
+      "lines": 869,
+      "todos": 0
+    },
+    {
+      "file": "src/components/Licensing.tsx",
+      "lines": 834,
+      "todos": 0
+    },
+    {
+      "file": "src/components/erp/screens/SalesScreen.tsx",
+      "lines": 809,
+      "todos": 0
+    },
+    {
+      "file": "src/components/Suppliers.tsx",
+      "lines": 721,
+      "todos": 0
+    },
+    {
+      "file": "src/components/erp/screens/DevicesScreen.tsx",
+      "lines": 689,
+      "todos": 0
+    },
+    {
+      "file": "src/components/CustomerLedgerPage.tsx",
+      "lines": 680,
+      "todos": 0
+    },
+    {
+      "file": "src/components/Transactions.tsx",
+      "lines": 646,
+      "todos": 0
+    },
+    {
+      "file": "src/components/SupplierLedgerPage.tsx",
+      "lines": 626,
+      "todos": 0
+    },
+    {
+      "file": "src/components/erp/screens/ServicesScreen.tsx",
+      "lines": 616,
+      "todos": 0
+    },
+    {
+      "file": "src/components/Settings.tsx",
+      "lines": 520,
+      "todos": 0
+    },
+    {
+      "file": "src/components/BarcodeScanner.tsx",
+      "lines": 427,
+      "todos": 0
+    },
+    {
+      "file": "src/components/LoginScreen.tsx",
+      "lines": 390,
+      "todos": 0
+    },
+    {
+      "file": "src/components/AiAdvisor.tsx",
+      "lines": 381,
+      "todos": 0
+    },
+    {
+      "file": "src/components/erp/screens/TransfersScreen.tsx",
+      "lines": 349,
+      "todos": 0
+    }
+  ],
+  "todoCount": 0,
+  "exactDuplicateFiles": []
+}

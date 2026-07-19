@@ -1,0 +1,890 @@
+const path = require('path');
+const crypto = require('crypto');
+const fs = require('fs');
+const { DatabaseSync } = require('node:sqlite');
+
+let db;
+const queryCache = new Map();
+const statementCache = new Map();
+const CACHE_TTL_MS = 1500;
+function cachedPrepare(sql) { if (!statementCache.has(sql)) statementCache.set(sql, db.prepare(sql)); return statementCache.get(sql); }
+function invalidateQueryCache() { queryCache.clear(); }
+const ALLOWED_TABLES = new Set(['customers','suppliers','categories','warehouses','products','stock_balances','stock_movements','invoices','invoice_items','payments','quotations','quotation_items','installment_plans','installment_payments','services','expenses','partners','partner_distributions','team_members','financial_vouchers','warehouse_transfers','deleted_records','sync_queue','attendance_devices','attendance_records','employee_signatures','payroll_employees','payroll_adjustments','payroll_runs','payroll_items']);
+
+function openDatabase(userDataPath) {
+  const dataDir = path.join(userDataPath, 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+  db = new DatabaseSync(path.join(dataDir, 'erp-hub.sqlite'));
+  db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -32000; PRAGMA mmap_size = 134217728; PRAGMA auto_vacuum = INCREMENTAL;');
+  migrate();
+  migrateLegacyColumns();
+  migratePlaintextPasswords();
+  return db;
+}
+
+function tableColumns(tableName) {
+  return new Set(db.prepare(`PRAGMA table_info(${tableName})`).all().map(row => row.name));
+}
+function ensureColumn(tableName, columnName, definition, backfillSql) {
+  const columns = tableColumns(tableName);
+  if (columns.has(columnName)) return;
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  if (backfillSql) db.exec(backfillSql);
+}
+function migrateLegacyColumns() {
+  // Older installations may already contain the HR tables with fewer columns.
+  // CREATE TABLE IF NOT EXISTS does not upgrade those tables, so every required
+  // column is added explicitly before any list/save query is allowed to run.
+  const employeeColumns = [
+    ['team_member_id','TEXT'],['name',"TEXT NOT NULL DEFAULT 'موظف'"],['job_title','TEXT'],
+    ['employee_role','TEXT'],['phone','TEXT'],['base_salary','REAL NOT NULL DEFAULT 0'],
+    ['hourly_rate','REAL NOT NULL DEFAULT 0'],['overtime_rate','REAL NOT NULL DEFAULT 0'],
+    ['standard_daily_hours','REAL NOT NULL DEFAULT 8'],['standard_monthly_days','REAL NOT NULL DEFAULT 30'],
+    ['attendance_employee_id','TEXT'],['active','INTEGER NOT NULL DEFAULT 1'],
+    ['created_at','TEXT'],['updated_at','TEXT']
+  ];
+  for (const [name, definition] of employeeColumns) ensureColumn('payroll_employees', name, definition);
+  ensureColumn('payroll_adjustments','created_at','TEXT');
+  ensureColumn('payroll_runs','created_at','TEXT');
+  ensureColumn('payroll_runs','updated_at','TEXT');
+  ensureColumn('payroll_items','created_at','TEXT');
+  ensureColumn('payroll_items','updated_at','TEXT');
+  ensureColumn('attendance_devices','created_at','TEXT');
+  ensureColumn('attendance_records','created_at','TEXT');
+  const timestampTables=['payroll_employees','payroll_adjustments','payroll_runs','payroll_items','attendance_devices','attendance_records'];
+  for (const tableName of timestampTables) {
+    const cols=tableColumns(tableName);
+    if(cols.has('created_at')) db.exec(`UPDATE ${tableName} SET created_at=COALESCE(created_at,CURRENT_TIMESTAMP)`);
+    if(cols.has('updated_at')) db.exec(`UPDATE ${tableName} SET updated_at=COALESCE(updated_at,created_at,CURRENT_TIMESTAMP)`);
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_payroll_employee_name ON payroll_employees(name COLLATE NOCASE);');
+}
+
+
+function closeDatabase() { if (db) { db.close(); db = undefined; statementCache.clear(); queryCache.clear(); } }
+
+function migrate() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS customers(
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT, email TEXT, address TEXT,
+      tax_number TEXT, opening_balance REAL NOT NULL DEFAULT 0, is_deleted INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);
+
+    CREATE TABLE IF NOT EXISTS suppliers(
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT, email TEXT, address TEXT,
+      tax_number TEXT, opening_balance REAL NOT NULL DEFAULT 0, is_deleted INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_suppliers_name ON suppliers(name COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_suppliers_phone ON suppliers(phone);
+
+    CREATE TABLE IF NOT EXISTS categories(id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS units(id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, symbol TEXT);
+    CREATE TABLE IF NOT EXISTS warehouses(id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, address TEXT, is_active INTEGER NOT NULL DEFAULT 1);
+    CREATE TABLE IF NOT EXISTS products(
+      id TEXT PRIMARY KEY, code TEXT NOT NULL, barcode TEXT, name TEXT NOT NULL,
+      category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
+      unit_id TEXT REFERENCES units(id) ON DELETE SET NULL,
+      purchase_price REAL NOT NULL DEFAULT 0 CHECK(purchase_price >= 0),
+      sale_price REAL NOT NULL DEFAULT 0 CHECK(sale_price >= 0),
+      minimum_stock REAL NOT NULL DEFAULT 0, is_deleted INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_products_code_unique ON products(code) WHERE is_deleted = 0;
+    CREATE INDEX IF NOT EXISTS idx_products_name ON products(name COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode);
+
+    CREATE TABLE IF NOT EXISTS stock_balances(
+      warehouse_id TEXT NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
+      product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      quantity REAL NOT NULL DEFAULT 0,
+      PRIMARY KEY(warehouse_id, product_id)
+    );
+    CREATE TABLE IF NOT EXISTS stock_movements(
+      id TEXT PRIMARY KEY, warehouse_id TEXT NOT NULL REFERENCES warehouses(id), product_id TEXT NOT NULL REFERENCES products(id),
+      movement_type TEXT NOT NULL CHECK(movement_type IN ('IN','OUT','TRANSFER_IN','TRANSFER_OUT','ADJUSTMENT','RETURN_IN','RETURN_OUT')),
+      quantity REAL NOT NULL CHECK(quantity > 0), reference_type TEXT, reference_id TEXT, occurred_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_stock_movements_product_date ON stock_movements(product_id, occurred_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_stock_movements_warehouse_date ON stock_movements(warehouse_id, occurred_at DESC);
+
+    CREATE TABLE IF NOT EXISTS invoices(
+      id TEXT PRIMARY KEY, invoice_number TEXT NOT NULL, invoice_type TEXT NOT NULL CHECK(invoice_type IN ('SALE','PURCHASE','SALE_RETURN','PURCHASE_RETURN')),
+      customer_id TEXT REFERENCES customers(id) ON DELETE RESTRICT, supplier_id TEXT REFERENCES suppliers(id) ON DELETE RESTRICT,
+      warehouse_id TEXT REFERENCES warehouses(id) ON DELETE RESTRICT, invoice_date TEXT NOT NULL,
+      subtotal REAL NOT NULL DEFAULT 0, discount REAL NOT NULL DEFAULT 0, tax REAL NOT NULL DEFAULT 0,
+      total REAL NOT NULL DEFAULT 0, paid REAL NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'OPEN', notes TEXT,
+      is_deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CHECK(total >= 0 AND paid >= 0 AND paid <= total + 0.001)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_number_type ON invoices(invoice_number, invoice_type) WHERE is_deleted = 0;
+    CREATE INDEX IF NOT EXISTS idx_invoices_customer_date ON invoices(customer_id, invoice_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_invoices_supplier_date ON invoices(supplier_id, invoice_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_invoices_status_date ON invoices(status, invoice_date DESC);
+
+    CREATE TABLE IF NOT EXISTS invoice_items(
+      id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+      product_id TEXT REFERENCES products(id) ON DELETE RESTRICT, service_id TEXT,
+      description TEXT NOT NULL, quantity REAL NOT NULL CHECK(quantity > 0), unit_price REAL NOT NULL CHECK(unit_price >= 0),
+      discount REAL NOT NULL DEFAULT 0, tax REAL NOT NULL DEFAULT 0, line_total REAL NOT NULL CHECK(line_total >= 0)
+    );
+    CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id);
+    CREATE INDEX IF NOT EXISTS idx_invoice_items_product ON invoice_items(product_id);
+
+    CREATE TABLE IF NOT EXISTS payments(
+      id TEXT PRIMARY KEY, invoice_id TEXT REFERENCES invoices(id) ON DELETE RESTRICT,
+      customer_id TEXT REFERENCES customers(id) ON DELETE RESTRICT, supplier_id TEXT REFERENCES suppliers(id) ON DELETE RESTRICT,
+      amount REAL NOT NULL CHECK(amount > 0), payment_method TEXT NOT NULL, payment_date TEXT NOT NULL,
+      reference TEXT, notes TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
+    CREATE INDEX IF NOT EXISTS idx_payments_date ON payments(payment_date DESC);
+
+    CREATE TABLE IF NOT EXISTS quotations(
+      id TEXT PRIMARY KEY, number TEXT NOT NULL UNIQUE, customer_id TEXT REFERENCES customers(id) ON DELETE SET NULL,
+      customer_name TEXT NOT NULL, quotation_date TEXT NOT NULL, valid_until TEXT NOT NULL,
+      total REAL NOT NULL DEFAULT 0 CHECK(total >= 0), status TEXT NOT NULL CHECK(status IN ('DRAFT','SENT','ACCEPTED','REJECTED')),
+      notes TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_quotations_customer_date ON quotations(customer_id, quotation_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_quotations_status_validity ON quotations(status, valid_until);
+    CREATE INDEX IF NOT EXISTS idx_quotations_search ON quotations(customer_name COLLATE NOCASE, number COLLATE NOCASE);
+    CREATE TABLE IF NOT EXISTS quotation_items(
+      id TEXT PRIMARY KEY, quotation_id TEXT NOT NULL REFERENCES quotations(id) ON DELETE CASCADE,
+      product_id TEXT REFERENCES products(id) ON DELETE SET NULL, description TEXT NOT NULL,
+      quantity REAL NOT NULL CHECK(quantity > 0), unit_price REAL NOT NULL CHECK(unit_price >= 0), line_total REAL NOT NULL CHECK(line_total >= 0)
+    );
+
+    CREATE TABLE IF NOT EXISTS installment_plans(
+      id TEXT PRIMARY KEY, invoice_id TEXT REFERENCES invoices(id) ON DELETE RESTRICT,
+      customer_id TEXT REFERENCES customers(id) ON DELETE RESTRICT, customer_name TEXT NOT NULL,
+      reference TEXT NOT NULL UNIQUE, total REAL NOT NULL CHECK(total >= 0), paid REAL NOT NULL DEFAULT 0 CHECK(paid >= 0),
+      due_date TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('PENDING','PARTIAL','PAID')),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CHECK(paid <= total + 0.001)
+    );
+    CREATE INDEX IF NOT EXISTS idx_installments_customer_due ON installment_plans(customer_id, due_date);
+    CREATE INDEX IF NOT EXISTS idx_installments_status_due ON installment_plans(status, due_date);
+    CREATE TABLE IF NOT EXISTS installment_payments(
+      id TEXT PRIMARY KEY, installment_id TEXT NOT NULL REFERENCES installment_plans(id) ON DELETE CASCADE,
+      amount REAL NOT NULL CHECK(amount > 0), paid_at TEXT NOT NULL, payment_method TEXT NOT NULL DEFAULT 'CASH', notes TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS services(id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT, default_price REAL NOT NULL DEFAULT 0, is_active INTEGER NOT NULL DEFAULT 1);
+    CREATE INDEX IF NOT EXISTS idx_services_name ON services(name COLLATE NOCASE);
+    CREATE TABLE IF NOT EXISTS expense_categories(id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, monthly_limit REAL);
+    CREATE TABLE IF NOT EXISTS expenses(id TEXT PRIMARY KEY, category_id TEXT REFERENCES expense_categories(id) ON DELETE SET NULL, amount REAL NOT NULL CHECK(amount > 0), expense_date TEXT NOT NULL, description TEXT);
+    CREATE INDEX IF NOT EXISTS idx_expenses_date_category ON expenses(expense_date DESC, category_id);
+    CREATE TABLE IF NOT EXISTS partners(id TEXT PRIMARY KEY, name TEXT NOT NULL, ownership_percent REAL NOT NULL DEFAULT 0 CHECK(ownership_percent >= 0 AND ownership_percent <= 100));
+    CREATE TABLE IF NOT EXISTS partner_transactions(id TEXT PRIMARY KEY, partner_id TEXT NOT NULL REFERENCES partners(id) ON DELETE RESTRICT, transaction_type TEXT NOT NULL, amount REAL NOT NULL CHECK(amount > 0), transaction_date TEXT NOT NULL, notes TEXT);
+    CREATE INDEX IF NOT EXISTS idx_partner_transactions_partner_date ON partner_transactions(partner_id, transaction_date DESC);
+
+    CREATE TABLE IF NOT EXISTS attendance_devices(
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, device_type TEXT NOT NULL DEFAULT 'GENERIC',
+      connection_type TEXT NOT NULL DEFAULT 'CSV', host TEXT, port INTEGER, serial_number TEXT,
+      branch TEXT, enabled INTEGER NOT NULL DEFAULT 1, last_sync_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_attendance_devices_name ON attendance_devices(name COLLATE NOCASE);
+    CREATE TABLE IF NOT EXISTS attendance_records(
+      id TEXT PRIMARY KEY, employee_id TEXT NOT NULL, employee_name TEXT NOT NULL,
+      event_type TEXT NOT NULL CHECK(event_type IN ('CHECK_IN','CHECK_OUT','BREAK_START','BREAK_END')),
+      event_time TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'MANUAL', device_id TEXT,
+      signature_data TEXT, notes TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(employee_id,event_type,event_time)
+    );
+    CREATE INDEX IF NOT EXISTS idx_attendance_employee_time ON attendance_records(employee_id,event_time DESC);
+    CREATE INDEX IF NOT EXISTS idx_attendance_time ON attendance_records(event_time DESC);
+    CREATE TABLE IF NOT EXISTS employee_signatures(
+      employee_id TEXT PRIMARY KEY, employee_name TEXT NOT NULL, signature_data TEXT NOT NULL,
+      signed_at TEXT NOT NULL, purpose TEXT NOT NULL DEFAULT 'ATTENDANCE', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS payroll_employees(
+      id TEXT PRIMARY KEY, team_member_id TEXT, name TEXT NOT NULL, job_title TEXT, employee_role TEXT, phone TEXT,
+      base_salary REAL NOT NULL DEFAULT 0 CHECK(base_salary >= 0), hourly_rate REAL NOT NULL DEFAULT 0 CHECK(hourly_rate >= 0),
+      overtime_rate REAL NOT NULL DEFAULT 0 CHECK(overtime_rate >= 0), standard_daily_hours REAL NOT NULL DEFAULT 8,
+      standard_monthly_days REAL NOT NULL DEFAULT 30, attendance_employee_id TEXT, active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_payroll_team_member ON payroll_employees(team_member_id) WHERE team_member_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_payroll_employee_name ON payroll_employees(name COLLATE NOCASE);
+    CREATE TABLE IF NOT EXISTS payroll_adjustments(
+      id TEXT PRIMARY KEY, employee_id TEXT NOT NULL REFERENCES payroll_employees(id) ON DELETE CASCADE,
+      month TEXT NOT NULL, adjustment_type TEXT NOT NULL CHECK(adjustment_type IN ('ALLOWANCE','DEDUCTION','BONUS','LOAN','OTHER')),
+      amount REAL NOT NULL CHECK(amount >= 0), description TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_payroll_adjustments_employee_month ON payroll_adjustments(employee_id,month);
+    CREATE TABLE IF NOT EXISTS payroll_runs(
+      id TEXT PRIMARY KEY, month TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('DRAFT','APPROVED','PAID')),
+      generated_at TEXT NOT NULL, approved_at TEXT, paid_at TEXT, notes TEXT,
+      gross_total REAL NOT NULL DEFAULT 0, deductions_total REAL NOT NULL DEFAULT 0, net_total REAL NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS payroll_items(
+      id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES payroll_runs(id) ON DELETE CASCADE,
+      employee_id TEXT NOT NULL, employee_name TEXT NOT NULL, base_salary REAL NOT NULL DEFAULT 0,
+      allowances REAL NOT NULL DEFAULT 0, bonuses REAL NOT NULL DEFAULT 0, overtime_hours REAL NOT NULL DEFAULT 0,
+      overtime_amount REAL NOT NULL DEFAULT 0, absence_days REAL NOT NULL DEFAULT 0, absence_deduction REAL NOT NULL DEFAULT 0,
+      deductions REAL NOT NULL DEFAULT 0, loans REAL NOT NULL DEFAULT 0, gross_salary REAL NOT NULL DEFAULT 0,
+      net_salary REAL NOT NULL DEFAULT 0, worked_hours REAL NOT NULL DEFAULT 0, attendance_days INTEGER NOT NULL DEFAULT 0,
+      snapshot_json TEXT, UNIQUE(run_id,employee_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_payroll_items_run ON payroll_items(run_id);
+
+    CREATE TABLE IF NOT EXISTS deleted_records(
+      id TEXT PRIMARY KEY, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, label TEXT NOT NULL,
+      payload_json TEXT NOT NULL, deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_deleted_records_date ON deleted_records(deleted_at DESC);
+
+
+    CREATE TABLE IF NOT EXISTS app_collections(
+      collection_name TEXT PRIMARY KEY,
+      data_json TEXT NOT NULL,
+      item_count INTEGER NOT NULL DEFAULT 0,
+      revision INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS team_members(
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL, phone TEXT,
+      active INTEGER NOT NULL DEFAULT 1, username TEXT, password TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_team_members_name ON team_members(name COLLATE NOCASE);
+    CREATE TABLE IF NOT EXISTS warehouse_transfers(
+      id TEXT PRIMARY KEY, product_id TEXT NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+      from_warehouse_id TEXT NOT NULL REFERENCES warehouses(id) ON DELETE RESTRICT,
+      to_warehouse_id TEXT NOT NULL REFERENCES warehouses(id) ON DELETE RESTRICT,
+      quantity REAL NOT NULL CHECK(quantity > 0), transfer_date TEXT NOT NULL, notes TEXT, performed_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_transfers_date ON warehouse_transfers(transfer_date DESC);
+    CREATE TABLE IF NOT EXISTS financial_vouchers(
+      id TEXT PRIMARY KEY, voucher_number TEXT NOT NULL, voucher_type TEXT NOT NULL,
+      party_type TEXT NOT NULL, party_id TEXT, amount REAL NOT NULL CHECK(amount > 0),
+      voucher_date TEXT NOT NULL, payment_method TEXT NOT NULL, notes TEXT, reference_invoice_id TEXT, created_by TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_vouchers_number ON financial_vouchers(voucher_number);
+    CREATE INDEX IF NOT EXISTS idx_vouchers_date_party ON financial_vouchers(voucher_date DESC, party_type, party_id);
+    CREATE TABLE IF NOT EXISTS partner_distributions(
+      id TEXT PRIMARY KEY, partner_id TEXT, partner_name TEXT NOT NULL, amount REAL NOT NULL CHECK(amount >= 0),
+      distribution_date TEXT NOT NULL, notes TEXT, status TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_distributions_date ON partner_distributions(distribution_date DESC);
+
+    CREATE TABLE IF NOT EXISTS sync_queue(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
+      operation TEXT NOT NULL CHECK(operation IN ('UPSERT','DELETE')), payload_json TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, synced_at TEXT, retry_count INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_sync_queue_pending ON sync_queue(synced_at, created_at);
+  `);
+}
+
+function table(name) {
+  if (!ALLOWED_TABLES.has(name)) throw new Error('Unsupported table');
+  return name;
+}
+
+function normalizeRow(row) {
+  if (!row) return row;
+  const out = { ...row };
+  if ('payload_json' in out) {
+    try { out.payload = JSON.parse(out.payload_json); } catch { out.payload = null; }
+    delete out.payload_json;
+  }
+  return out;
+}
+
+function list({ table: tableName, page = 1, pageSize = 50, search = '', orderBy, direction = 'DESC' }) {
+  const t = table(tableName);
+  const safePage = Math.max(1, Number(page) || 1);
+  const safeSize = Math.min(200, Math.max(1, Number(pageSize) || 50));
+  const offset = (safePage - 1) * safeSize;
+  const dir = String(direction).toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+  const allowedOrder = new Set(['created_at','updated_at','quotation_date','valid_until','due_date','deleted_at','number','reference','name','invoice_date','invoice_number','occurred_at','voucher_date','transfer_date','expense_date']);
+  const defaultOrder = t === 'deleted_records' ? 'deleted_at' : (t === 'installment_plans' ? 'due_date' : (t === 'quotations' ? 'quotation_date' : 'created_at'));
+  let order = allowedOrder.has(orderBy) ? orderBy : defaultOrder;
+  const availableColumns = tableColumns(t);
+  if (!availableColumns.has(order)) order = availableColumns.has('created_at') ? 'created_at' : (availableColumns.has('name') ? 'name' : 'rowid');
+  let where = '';
+  let params = [];
+  if (search) {
+    const term = `%${String(search).trim()}%`;
+    if (t === 'quotations') { where = 'WHERE number LIKE ? OR customer_name LIKE ? OR status LIKE ?'; params = [term, term, term]; }
+    else if (t === 'installment_plans') { where = 'WHERE reference LIKE ? OR customer_name LIKE ? OR status LIKE ?'; params = [term, term, term]; }
+    else if (t === 'deleted_records') { where = 'WHERE label LIKE ? OR entity_type LIKE ?'; params = [term, term]; }
+    else if (t === 'customers' || t === 'suppliers') { where = 'WHERE name LIKE ? OR phone LIKE ? OR email LIKE ?'; params = [term, term, term]; }
+    else if (t === 'products') { where = 'WHERE name LIKE ? OR code LIKE ? OR barcode LIKE ?'; params = [term, term, term]; }
+    else if (t === 'invoices') { where = 'WHERE invoice_number LIKE ? OR status LIKE ? OR notes LIKE ?'; params = [term, term, term]; }
+    else if (t === 'services' || t === 'partners' || t === 'team_members') { where = 'WHERE name LIKE ?'; params = [term]; }
+    else if (t === 'financial_vouchers') { where = 'WHERE voucher_number LIKE ? OR party_type LIKE ? OR notes LIKE ?'; params = [term, term, term]; }
+  }
+  const cacheKey = JSON.stringify([t,safePage,safeSize,search,order,dir]);
+  const hit = queryCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return structuredClone(hit.value);
+  const countSql = `SELECT COUNT(*) AS count FROM ${t} ${where}`;
+  const rowsSql = `SELECT * FROM ${t} ${where} ORDER BY ${order} ${dir} LIMIT ? OFFSET ?`;
+  const count = cachedPrepare(countSql).get(...params).count;
+  const rows = cachedPrepare(rowsSql).all(...params, safeSize, offset).map(normalizeRow);
+  const value = { rows, count, page: safePage, pageSize: safeSize, pages: Math.max(1, Math.ceil(count / safeSize)) };
+  queryCache.set(cacheKey, { at: Date.now(), value });
+  return structuredClone(value);
+}
+
+function executeTransaction(fn) {
+  db.exec('BEGIN IMMEDIATE');
+  try { const result = fn(); db.exec('COMMIT'); invalidateQueryCache(); return result; }
+  catch (e) { db.exec('ROLLBACK'); throw e; }
+}
+
+function createQuotation(data) {
+  return executeTransaction(() => {
+    const items = Array.isArray(data.items) ? data.items : [];
+    const computedTotal = items.reduce((sum, item) => sum + Math.max(0, Number(item.quantity)||0) * Math.max(0, Number(item.unitPrice)||0), 0);
+    const total = items.length ? computedTotal : Math.max(0, Number(data.total)||0);
+    db.prepare(`INSERT INTO quotations(id,number,customer_id,customer_name,quotation_date,valid_until,total,status,notes)
+      VALUES(?,?,?,?,?,?,?,?,?)`).run(data.id,data.number,data.customerId||null,data.customerName,data.date,data.validUntil,total,data.status||'DRAFT',data.notes||null);
+    const insertItem = db.prepare(`INSERT INTO quotation_items(id,quotation_id,product_id,description,quantity,unit_price,line_total) VALUES(?,?,?,?,?,?,?)`);
+    for (const item of items) {
+      const quantity = Math.max(0, Number(item.quantity)||0);
+      const unitPrice = Math.max(0, Number(item.unitPrice)||0);
+      if (!item.description || quantity <= 0) continue;
+      insertItem.run(item.id || `qi_${Date.now()}_${Math.random().toString(36).slice(2,8)}`, data.id, item.productId || null, item.description, quantity, unitPrice, quantity * unitPrice);
+    }
+    return getQuotation(data.id);
+  });
+}
+function updateQuotation(data) {
+  return executeTransaction(() => {
+    const existing=db.prepare('SELECT id FROM quotations WHERE id=?').get(data.id);
+    if(!existing) throw new Error('Quotation not found');
+    const items=Array.isArray(data.items)?data.items:[];
+    const total=items.reduce((sum,item)=>sum+Math.max(0,Number(item.quantity)||0)*Math.max(0,Number(item.unitPrice)||0),0);
+    db.prepare(`UPDATE quotations SET number=?,customer_id=?,customer_name=?,quotation_date=?,valid_until=?,total=?,status=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(data.number,data.customerId||null,data.customerName,data.date,data.validUntil,total,data.status||'DRAFT',data.notes||null,data.id);
+    db.prepare('DELETE FROM quotation_items WHERE quotation_id=?').run(data.id);
+    const stmt=db.prepare(`INSERT INTO quotation_items(id,quotation_id,product_id,description,quantity,unit_price,line_total) VALUES(?,?,?,?,?,?,?)`);
+    for(const item of items){const quantity=Math.max(0,Number(item.quantity)||0),unitPrice=Math.max(0,Number(item.unitPrice)||0);if(!item.description||quantity<=0)continue;stmt.run(item.id||`qi_${Date.now()}_${Math.random().toString(36).slice(2,8)}`,data.id,item.productId||null,item.description,quantity,unitPrice,quantity*unitPrice);}
+    return getQuotation(data.id);
+  });
+}
+function getQuotation(id) {
+  const quotation = db.prepare('SELECT * FROM quotations WHERE id=?').get(id);
+  if (!quotation) return null;
+  quotation.items = db.prepare('SELECT * FROM quotation_items WHERE quotation_id=? ORDER BY rowid').all(id);
+  return quotation;
+}
+function updateQuotationStatus({ id, status }) {
+  const allowed = new Set(['DRAFT','SENT','ACCEPTED','REJECTED']);
+  if (!allowed.has(status)) throw new Error('Invalid quotation status');
+  db.prepare('UPDATE quotations SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(status,id);
+  return getQuotation(id);
+}
+function createInstallment(data) {
+  return executeTransaction(() => {
+    const total = Math.max(0, Number(data.total) || 0);
+    const paid = Math.min(total, Math.max(0, Number(data.paid) || 0));
+    if (!data.id) throw new Error('Installment id is required');
+    if (!String(data.customerName || '').trim()) throw new Error('Customer is required');
+    if (total <= 0) throw new Error('Installment total must be greater than zero');
+    const status = paid >= total ? 'PAID' : paid > 0 ? 'PARTIAL' : 'PENDING';
+    db.prepare(`INSERT INTO installment_plans(id,invoice_id,customer_id,customer_name,reference,total,paid,due_date,status)
+      VALUES(?,?,?,?,?,?,?,?,?)`).run(data.id,data.invoiceId||null,data.customerId||null,String(data.customerName).trim(),String(data.reference||data.id),total,paid,data.dueDate||new Date().toISOString().slice(0,10),status);
+    if (paid > 0) db.prepare('INSERT INTO installment_payments(id,installment_id,amount,paid_at,payment_method,notes) VALUES(?,?,?,?,?,?)')
+      .run(`pay_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,data.id,paid,new Date().toISOString(),'OPENING','Initial paid amount');
+    return db.prepare('SELECT * FROM installment_plans WHERE id=?').get(data.id);
+  });
+}
+function collectInstallment({ id, amount, paymentMethod = 'CASH' }) {
+  return executeTransaction(() => {
+    const row = db.prepare('SELECT * FROM installment_plans WHERE id=?').get(id);
+    if (!row) throw new Error('Installment not found');
+    const applied = Math.min(Number(amount)||0, row.total-row.paid);
+    if (applied <= 0) return row;
+    db.prepare('INSERT INTO installment_payments(id,installment_id,amount,paid_at,payment_method) VALUES(?,?,?,?,?)')
+      .run(`pay_${Date.now()}_${Math.random().toString(36).slice(2,7)}`, id, applied, new Date().toISOString(), paymentMethod);
+    const paid = row.paid + applied;
+    const status = paid >= row.total ? 'PAID' : 'PARTIAL';
+    db.prepare('UPDATE installment_plans SET paid=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(paid,status,id);
+    return db.prepare('SELECT * FROM installment_plans WHERE id=?').get(id);
+  });
+}
+function softDelete({ entity, id, label }) {
+  const mapping = entity === 'quotation' ? ['quotations','number'] : ['installment_plans','reference'];
+  return executeTransaction(() => {
+    const row = db.prepare(`SELECT * FROM ${mapping[0]} WHERE id=?`).get(id);
+    if (!row) return false;
+    const payload = { row };
+    if (entity === 'quotation') payload.items = db.prepare('SELECT * FROM quotation_items WHERE quotation_id=?').all(id);
+    if (entity === 'installment') payload.payments = db.prepare('SELECT * FROM installment_payments WHERE installment_id=?').all(id);
+    db.prepare('INSERT INTO deleted_records(id,entity_type,entity_id,label,payload_json,deleted_at) VALUES(?,?,?,?,?,?)')
+      .run(`bin_${Date.now()}_${Math.random().toString(36).slice(2,7)}`, entity, id, label || row[mapping[1]], JSON.stringify(payload), new Date().toISOString());
+    db.prepare(`DELETE FROM ${mapping[0]} WHERE id=?`).run(id);
+    return true;
+  });
+}
+function restoreDeleted(id) {
+  return executeTransaction(() => {
+    const deleted = db.prepare('SELECT * FROM deleted_records WHERE id=?').get(id);
+    if (!deleted) return false;
+    const payload = JSON.parse(deleted.payload_json);
+    const row = payload.row || payload;
+    let restored = false;
+    if ((payload?.kind === 'collection' && payload?.collection) || payload?.kind === 'collection_batch') {
+      restored = restoreCollectionPayload(payload);
+    } else if (deleted.entity_type === 'quotation') {
+      db.prepare(`INSERT OR REPLACE INTO quotations(id,number,customer_id,customer_name,quotation_date,valid_until,total,status,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(row.id,row.number,row.customer_id,row.customer_name,row.quotation_date,row.valid_until,row.total,row.status,row.notes,row.created_at,row.updated_at);
+      const insertItem = db.prepare(`INSERT OR REPLACE INTO quotation_items(id,quotation_id,product_id,description,quantity,unit_price,line_total) VALUES(?,?,?,?,?,?,?)`);
+      for (const item of payload.items || []) insertItem.run(item.id,item.quotation_id,item.product_id,item.description,item.quantity,item.unit_price,item.line_total);
+      restored = true;
+    } else if (deleted.entity_type === 'installment') {
+      db.prepare(`INSERT OR REPLACE INTO installment_plans(id,invoice_id,customer_id,customer_name,reference,total,paid,due_date,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(row.id,row.invoice_id,row.customer_id,row.customer_name,row.reference,row.total,row.paid,row.due_date,row.status,row.created_at,row.updated_at);
+      const insertPayment = db.prepare(`INSERT OR REPLACE INTO installment_payments(id,installment_id,amount,paid_at,payment_method,notes) VALUES(?,?,?,?,?,?)`);
+      for (const payment of payload.payments || []) insertPayment.run(payment.id,payment.installment_id,payment.amount,payment.paid_at,payment.payment_method,payment.notes);
+      restored = true;
+    }
+    // Never remove an item from the recycle bin unless its payload was actually restored.
+    if (!restored) throw new Error(`Unsupported or invalid recycle-bin payload: ${deleted.entity_type}`);
+    db.prepare('DELETE FROM deleted_records WHERE id=?').run(id);
+    return true;
+  });
+}
+function purgeDeleted(id) { db.prepare('DELETE FROM deleted_records WHERE id=?').run(id); return true; }
+function importLegacy({ quotations = [], installments = [], deleted = [] }) {
+  return executeTransaction(() => {
+    const q = db.prepare(`INSERT OR IGNORE INTO quotations(id,number,customer_id,customer_name,quotation_date,valid_until,total,status,notes) VALUES(?,?,?,?,?,?,?,?,?)`);
+    for (const x of quotations) q.run(x.id,x.number,x.customerId||null,x.customerName,x.date,x.validUntil,Number(x.total)||0,x.status||'DRAFT',x.notes||null);
+    const i = db.prepare(`INSERT OR IGNORE INTO installment_plans(id,customer_id,customer_name,reference,total,paid,due_date,status) VALUES(?,?,?,?,?,?,?,?)`);
+    for (const x of installments) i.run(x.id,x.customerId||null,x.customerName,x.reference,Number(x.total)||0,Number(x.paid)||0,x.dueDate,x.status||'PENDING');
+    const d = db.prepare(`INSERT OR IGNORE INTO deleted_records(id,entity_type,entity_id,label,payload_json,deleted_at) VALUES(?,?,?,?,?,?)`);
+    for (const x of deleted) d.run(x.id,x.entity,x.payload?.id||x.id,x.label,JSON.stringify(x.payload||{}),x.deletedAt||new Date().toISOString());
+    return { quotations: quotations.length, installments: installments.length, deleted: deleted.length };
+  });
+}
+function stats() {
+  const tables = ['customers','suppliers','products','invoices','invoice_items','quotations','installment_plans','deleted_records'];
+  return Object.fromEntries(tables.map(t => [t, db.prepare(`SELECT COUNT(*) AS count FROM ${t}`).get().count]));
+}
+
+
+
+const CORE_COLLECTIONS = new Set([
+  'products','categories','suppliers','transactions','customers','warehouses','transfers','expenses',
+  'teamMembers','partners','distributions','services','vouchers','invoices','chatHistory'
+]);
+
+function parseCollectionRow(row) {
+  if (!row) return null;
+  try { return JSON.parse(row.data_json); } catch { return []; }
+}
+
+function getCollections(names = []) {
+  const requested = Array.isArray(names) && names.length ? names : [...CORE_COLLECTIONS];
+  const stmt = db.prepare('SELECT data_json FROM app_collections WHERE collection_name=?');
+  const collections = {};
+  for (const name of requested) {
+    if (!CORE_COLLECTIONS.has(name)) continue;
+    collections[name] = parseCollectionRow(stmt.get(name)) || [];
+  }
+  return collections;
+}
+
+function hasMigratedLegacy() {
+  return Boolean(db.prepare("SELECT 1 FROM schema_migrations WHERE version=2").get());
+}
+
+function safeArray(value) { return Array.isArray(value) ? value : []; }
+function n(value, fallback=0) { const x=Number(value); return Number.isFinite(x) ? x : fallback; }
+function text(value, fallback='') { return value == null ? fallback : String(value); }
+function isPasswordHash(value) { return typeof value === 'string' && value.startsWith('scrypt$'); }
+function hashPassword(value) {
+  const password = text(value);
+  if (!password || isPasswordHash(password)) return password || null;
+  const salt = crypto.randomBytes(16);
+  const derived = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });
+  return `scrypt$16384$8$1$${salt.toString('base64')}$${derived.toString('base64')}`;
+}
+function verifyPassword(password, encoded) {
+  if (!encoded) return !password;
+  if (!isPasswordHash(encoded)) return crypto.timingSafeEqual(Buffer.from(String(password)), Buffer.from(String(encoded)));
+  const parts = encoded.split('$');
+  if (parts.length !== 6) return false;
+  const [, nCost, rCost, pCost, saltB64, hashB64] = parts;
+  const expected = Buffer.from(hashB64, 'base64');
+  const actual = crypto.scryptSync(String(password), Buffer.from(saltB64, 'base64'), expected.length, { N:Number(nCost), r:Number(rCost), p:Number(pCost) });
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+function migratePlaintextPasswords() {
+  const row = db.prepare("SELECT data_json FROM app_collections WHERE collection_name='teamMembers'").get();
+  if (row) {
+    const members = parseCollectionRow(row) || [];
+    let changed = false;
+    for (const member of members) if (member?.password && !isPasswordHash(member.password)) { member.password = hashPassword(member.password); changed = true; }
+    if (changed) db.prepare("UPDATE app_collections SET data_json=?,revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE collection_name='teamMembers'").run(JSON.stringify(members));
+  }
+  const plain = db.prepare("SELECT id,password FROM team_members WHERE password IS NOT NULL AND password NOT LIKE 'scrypt$%'").all();
+  const update = db.prepare('UPDATE team_members SET password=?,updated_at=CURRENT_TIMESTAMP WHERE id=?');
+  for (const member of plain) update.run(hashPassword(member.password), member.id);
+}
+function sanitizeCollection(name, rows) {
+  const clean = safeArray(rows).map(row => row && typeof row === 'object' ? { ...row } : row);
+  if (name === 'teamMembers') for (const member of clean) if (member && typeof member === 'object') member.password = hashPassword(member.password);
+  return clean;
+}
+function deleteMissing(table, ids) {
+  db.exec('CREATE TEMP TABLE IF NOT EXISTS projection_seen(id TEXT PRIMARY KEY); DELETE FROM projection_seen;');
+  const seen = db.prepare('INSERT OR IGNORE INTO projection_seen(id) VALUES(?)');
+  for (const id of ids) seen.run(text(id));
+  db.prepare(`DELETE FROM ${table} WHERE id NOT IN (SELECT id FROM projection_seen)`).run();
+}
+
+function projectRelationalIncremental(collections) {
+  const categoryIds = new Set((getCollections(['categories']).categories || []).map(x=>text(x.id)));
+  const warehouseRows = getCollections(['warehouses']).warehouses || [];
+  const warehouseIds = new Set((warehouseRows.length?warehouseRows:[{id:'warehouse_default'}]).map(x=>text(x.id)));
+  const productIds = new Set((getCollections(['products']).products || []).map(x=>text(x.id)));
+  const customerIds = new Set((getCollections(['customers']).customers || []).map(x=>text(x.id)));
+
+  if ('categories' in collections) {
+    const rows=normalizeUniqueCollectionNames('categories',collections.categories), stmt=db.prepare(`INSERT INTO categories(id,name) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name`);
+    for(const x of rows) stmt.run(text(x.id),text(x.name,'غير مصنف')); deleteMissing('categories',rows.map(x=>x.id));
+  }
+  if ('suppliers' in collections) {
+    const rows=safeArray(collections.suppliers), stmt=db.prepare(`INSERT INTO suppliers(id,name,phone,email,address,opening_balance,is_deleted,updated_at) VALUES(?,?,?,?,?,?,0,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET name=excluded.name,phone=excluded.phone,email=excluded.email,address=excluded.address,opening_balance=excluded.opening_balance,is_deleted=0,updated_at=CURRENT_TIMESTAMP`);
+    for(const x of rows) stmt.run(text(x.id),text(x.name,'مورد'),x.phone||null,x.email||null,x.address||null,n(x.balance)); deleteMissing('suppliers',rows.map(x=>x.id));
+  }
+  if ('customers' in collections) {
+    const rows=safeArray(collections.customers), stmt=db.prepare(`INSERT INTO customers(id,name,phone,email,address,opening_balance,is_deleted,updated_at) VALUES(?,?,?,?,?,?,0,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET name=excluded.name,phone=excluded.phone,email=excluded.email,address=excluded.address,opening_balance=excluded.opening_balance,is_deleted=0,updated_at=CURRENT_TIMESTAMP`);
+    for(const x of rows) stmt.run(text(x.id),text(x.name,'عميل'),x.phone||null,x.email||null,x.address||null,n(x.balance)); deleteMissing('customers',rows.map(x=>x.id));
+  }
+  if ('warehouses' in collections) {
+    const rows=normalizeUniqueCollectionNames('warehouses',collections.warehouses), stmt=db.prepare(`INSERT INTO warehouses(id,name,address,is_active) VALUES(?,?,?,1) ON CONFLICT(id) DO UPDATE SET name=excluded.name,address=excluded.address,is_active=1`);
+    for(const x of rows) stmt.run(text(x.id),text(x.name,'مخزن'),x.location||null); if(!rows.length) stmt.run('warehouse_default','المخزن الرئيسي',null); deleteMissing('warehouses',(rows.length?rows:[{id:'warehouse_default'}]).map(x=>x.id));
+  }
+  if ('products' in collections) {
+    // A restored legacy product may have no warehouse collection at all.
+    // Ensure the fallback parent exists before inserting stock_balances.
+    if (!warehouseRows.length) db.prepare('INSERT OR IGNORE INTO warehouses(id,name,address,is_active) VALUES(?,?,?,1)').run('warehouse_default','المخزن الرئيسي',null);
+    const rows=safeArray(collections.products), prod=db.prepare(`INSERT INTO products(id,code,barcode,name,category_id,purchase_price,sale_price,minimum_stock,is_deleted,updated_at) VALUES(?,?,?,?,?,?,?,?,0,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET code=excluded.code,barcode=excluded.barcode,name=excluded.name,category_id=excluded.category_id,purchase_price=excluded.purchase_price,sale_price=excluded.sale_price,minimum_stock=excluded.minimum_stock,is_deleted=0,updated_at=CURRENT_TIMESTAMP`), bal=db.prepare(`INSERT INTO stock_balances(warehouse_id,product_id,quantity) VALUES(?,?,?) ON CONFLICT(warehouse_id,product_id) DO UPDATE SET quantity=excluded.quantity`);
+    for(const x of rows){const id=text(x.id),wid=warehouseIds.has(text(x.warehouseId))?text(x.warehouseId):(warehouseRows[0]?.id||'warehouse_default'); prod.run(id,text(x.code,id),text(x.code)||null,text(x.name,'منتج'),categoryIds.has(text(x.categoryId))?text(x.categoryId):null,n(x.costPrice),n(x.sellingPrice),n(x.minQuantity)); bal.run(wid,id,n(x.quantity));}
+    deleteMissing('products',rows.map(x=>x.id));
+  }
+  if ('invoices' in collections) {
+    const rows=safeArray(collections.invoices), inv=db.prepare(`INSERT INTO invoices(id,invoice_number,invoice_type,customer_id,warehouse_id,invoice_date,subtotal,discount,tax,total,paid,status,notes,is_deleted,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET invoice_number=excluded.invoice_number,customer_id=excluded.customer_id,invoice_date=excluded.invoice_date,subtotal=excluded.subtotal,discount=excluded.discount,total=excluded.total,paid=excluded.paid,status=excluded.status,is_deleted=0,updated_at=CURRENT_TIMESTAMP`), item=db.prepare(`INSERT INTO invoice_items(id,invoice_id,product_id,service_id,description,quantity,unit_price,discount,tax,line_total) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET product_id=excluded.product_id,service_id=excluded.service_id,description=excluded.description,quantity=excluded.quantity,unit_price=excluded.unit_price,line_total=excluded.line_total`), delItems=db.prepare('DELETE FROM invoice_items WHERE invoice_id=?');
+    for(const x of rows){const total=n(x.total),paid=x.paymentMethod==='DEBT'||x.paymentMethod==='INSTALLMENT'?0:total,id=text(x.id);inv.run(id,text(x.invoiceNo,id),'SALE',customerIds.has(text(x.customerId))?text(x.customerId):null,null,text(x.date,new Date().toISOString()),n(x.subtotal,total),n(x.discount),0,total,paid,paid>=total?'PAID':'OPEN',null);delItems.run(id);for(const y of safeArray(x.items))item.run(text(y.id,`${id}_${text(y.productId||y.serviceId)}_${n(y.quantity)}`),id,productIds.has(text(y.productId))?text(y.productId):null,y.serviceId||null,text(y.name,'بند'),Math.max(.000001,n(y.quantity,1)),Math.max(0,n(y.unitPrice)),0,0,Math.max(0,n(y.quantity,1)*n(y.unitPrice)));}
+    deleteMissing('invoices',rows.map(x=>x.id));
+  }
+  const simple = [
+    ['expenses','expenses',`INSERT INTO expenses(id,category_id,amount,expense_date,description) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET category_id=excluded.category_id,amount=excluded.amount,expense_date=excluded.expense_date,description=excluded.description`, x=>[`expense_${text(x.category,'other')}`,Math.max(.000001,n(x.amount)),text(x.date,new Date().toISOString()),x.title||x.notes||null]],
+    ['services','services',`INSERT INTO services(id,name,category,default_price,is_active) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,category=excluded.category,default_price=excluded.default_price,is_active=excluded.is_active`, x=>[text(x.name,'خدمة'),x.type||null,Math.max(0,n(x.price)),x.status==='DELIVERED'?0:1]],
+    ['partners','partners',`INSERT INTO partners(id,name,ownership_percent) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,ownership_percent=excluded.ownership_percent`, x=>[text(x.name,'شريك'),Math.min(100,Math.max(0,n(x.equityPercentage)))]],
+    ['teamMembers','team_members',`INSERT INTO team_members(id,name,role,phone,active,username,password) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,role=excluded.role,phone=excluded.phone,active=excluded.active,username=excluded.username,password=excluded.password,updated_at=CURRENT_TIMESTAMP`, x=>[text(x.name,'مستخدم'),text(x.role,'cashier'),x.phone||null,x.active===false?0:1,x.username||null,hashPassword(x.password)]],
+  ];
+  for(const [key,table,sql,map] of simple) if(key in collections){const rows=safeArray(collections[key]),stmt=db.prepare(sql);if(key==='expenses'){const ec=db.prepare('INSERT OR IGNORE INTO expense_categories(id,name) VALUES(?,?)');for(const x of rows)ec.run(`expense_${text(x.category,'other')}`,text(x.category,'other'));}for(const x of rows)stmt.run(text(x.id),...map(x));deleteMissing(table,rows.map(x=>x.id));}
+  if ('transactions' in collections){const rows=safeArray(collections.transactions),stmt=db.prepare(`INSERT INTO stock_movements(id,warehouse_id,product_id,movement_type,quantity,reference_type,reference_id,occurred_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET warehouse_id=excluded.warehouse_id,product_id=excluded.product_id,movement_type=excluded.movement_type,quantity=excluded.quantity,occurred_at=excluded.occurred_at`);for(const x of rows){if(!productIds.has(text(x.productId)))continue;const wid=warehouseIds.has(text(x.warehouseId))?text(x.warehouseId):(warehouseRows[0]?.id||'warehouse_default'),mt=x.type==='IN'?'IN':x.type==='SALE_RETURN'?'RETURN_IN':x.type==='PURCHASE_RETURN'?'RETURN_OUT':'OUT';stmt.run(text(x.id),wid,text(x.productId),mt,Math.max(.000001,Math.abs(n(x.quantity,1))),'LEGACY_TRANSACTION',null,text(x.date,new Date().toISOString()));}deleteMissing('stock_movements',rows.map(x=>x.id));}
+  if ('transfers' in collections){const rows=safeArray(collections.transfers),stmt=db.prepare(`INSERT INTO warehouse_transfers(id,product_id,from_warehouse_id,to_warehouse_id,quantity,transfer_date,notes,performed_by) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET product_id=excluded.product_id,from_warehouse_id=excluded.from_warehouse_id,to_warehouse_id=excluded.to_warehouse_id,quantity=excluded.quantity,transfer_date=excluded.transfer_date,notes=excluded.notes,performed_by=excluded.performed_by`);for(const x of rows)if(productIds.has(text(x.productId))&&warehouseIds.has(text(x.fromWarehouseId))&&warehouseIds.has(text(x.toWarehouseId)))stmt.run(text(x.id),text(x.productId),text(x.fromWarehouseId),text(x.toWarehouseId),Math.max(.000001,n(x.quantity,1)),text(x.date,new Date().toISOString()),x.notes||null,x.performedBy||null);deleteMissing('warehouse_transfers',rows.map(x=>x.id));}
+  if ('distributions' in collections){const rows=safeArray(collections.distributions),stmt=db.prepare(`INSERT INTO partner_distributions(id,partner_id,partner_name,amount,distribution_date,notes,status) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET partner_id=excluded.partner_id,partner_name=excluded.partner_name,amount=excluded.amount,distribution_date=excluded.distribution_date,notes=excluded.notes,status=excluded.status`);for(const x of rows)stmt.run(text(x.id),x.partnerId==='all'?null:x.partnerId||null,text(x.partnerName,'الكل'),Math.max(0,n(x.amount)),text(x.date,new Date().toISOString()),x.notes||null,text(x.status,'PENDING'));deleteMissing('partner_distributions',rows.map(x=>x.id));}
+  if ('vouchers' in collections){const rows=safeArray(collections.vouchers),stmt=db.prepare(`INSERT INTO financial_vouchers(id,voucher_number,voucher_type,party_type,party_id,amount,voucher_date,payment_method,notes,reference_invoice_id,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET voucher_number=excluded.voucher_number,voucher_type=excluded.voucher_type,party_type=excluded.party_type,party_id=excluded.party_id,amount=excluded.amount,voucher_date=excluded.voucher_date,payment_method=excluded.payment_method,notes=excluded.notes,reference_invoice_id=excluded.reference_invoice_id,created_by=excluded.created_by`);for(const x of rows)stmt.run(text(x.id),text(x.voucherNumber,x.id),text(x.type),text(x.partyType),x.partyId||null,Math.max(.000001,n(x.amount)),text(x.date,new Date().toISOString()),text(x.paymentMethod,'CASH'),x.notes||null,x.referenceInvoiceId||null,x.createdBy||null);deleteMissing('financial_vouchers',rows.map(x=>x.id));}
+}
+
+function replaceRelationalProjection(collections) {
+  // Parent tables first. Exact replacement makes SQLite the authoritative local store.
+  const categories = normalizeUniqueCollectionNames('categories', collections.categories);
+  const suppliers = safeArray(collections.suppliers);
+  const customers = safeArray(collections.customers);
+  const warehouses = normalizeUniqueCollectionNames('warehouses', collections.warehouses);
+  const products = safeArray(collections.products);
+  const invoices = safeArray(collections.invoices);
+
+  db.exec('UPDATE installment_plans SET invoice_id=NULL; DELETE FROM invoice_items; DELETE FROM payments; DELETE FROM installment_payments; DELETE FROM stock_movements; DELETE FROM warehouse_transfers; DELETE FROM financial_vouchers; DELETE FROM partner_transactions; DELETE FROM partner_distributions; DELETE FROM invoices; DELETE FROM stock_balances; DELETE FROM products; DELETE FROM categories; DELETE FROM suppliers; DELETE FROM customers; DELETE FROM warehouses; DELETE FROM expenses; DELETE FROM expense_categories; DELETE FROM services; DELETE FROM partners; DELETE FROM team_members;');
+
+  const cat = db.prepare('INSERT INTO categories(id,name) VALUES(?,?)');
+  for (const x of categories) cat.run(text(x.id), text(x.name,'غير مصنف'));
+  const sup = db.prepare('INSERT INTO suppliers(id,name,phone,email,address,opening_balance) VALUES(?,?,?,?,?,?)');
+  for (const x of suppliers) sup.run(text(x.id),text(x.name,'مورد'),x.phone||null,x.email||null,x.address||null,n(x.balance));
+  const cus = db.prepare('INSERT INTO customers(id,name,phone,email,address,opening_balance) VALUES(?,?,?,?,?,?)');
+  for (const x of customers) cus.run(text(x.id),text(x.name,'عميل'),x.phone||null,x.email||null,x.address||null,n(x.balance));
+  const wh = db.prepare('INSERT INTO warehouses(id,name,address) VALUES(?,?,?)');
+  for (const x of warehouses) wh.run(text(x.id),text(x.name,'مخزن'),x.location||null);
+  if (!warehouses.length) wh.run('warehouse_default','المخزن الرئيسي',null);
+
+  const prod = db.prepare('INSERT INTO products(id,code,barcode,name,category_id,purchase_price,sale_price,minimum_stock) VALUES(?,?,?,?,?,?,?,?)');
+  const bal = db.prepare('INSERT INTO stock_balances(warehouse_id,product_id,quantity) VALUES(?,?,?)');
+  const categoryIds = new Set(categories.map(x=>text(x.id)));
+  const warehouseIds = new Set((warehouses.length?warehouses:[{id:'warehouse_default'}]).map(x=>text(x.id)));
+  for (const x of products) {
+    const id=text(x.id), wid=warehouseIds.has(text(x.warehouseId))?text(x.warehouseId):(warehouses[0]?.id||'warehouse_default');
+    prod.run(id,text(x.code,id),text(x.code)||null,text(x.name,'منتج'),categoryIds.has(text(x.categoryId))?text(x.categoryId):null,n(x.costPrice),n(x.sellingPrice),n(x.minQuantity));
+    bal.run(wid,id,n(x.quantity));
+  }
+
+  const inv = db.prepare(`INSERT INTO invoices(id,invoice_number,invoice_type,customer_id,warehouse_id,invoice_date,subtotal,discount,tax,total,paid,status,notes)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const item = db.prepare('INSERT INTO invoice_items(id,invoice_id,product_id,service_id,description,quantity,unit_price,discount,tax,line_total) VALUES(?,?,?,?,?,?,?,?,?,?)');
+  const customerIds=new Set(customers.map(x=>text(x.id))), productIds=new Set(products.map(x=>text(x.id)));
+  for (const x of invoices) {
+    const total=n(x.total), paid=x.paymentMethod==='DEBT'||x.paymentMethod==='INSTALLMENT'?0:total;
+    inv.run(text(x.id),text(x.invoiceNo,x.id),'SALE',customerIds.has(text(x.customerId))?text(x.customerId):null,null,text(x.date,new Date().toISOString()),n(x.subtotal,total),n(x.discount),0,total,paid,paid>=total?'PAID':'OPEN',null);
+    for (const y of safeArray(x.items)) item.run(text(y.id,`${x.id}_${Math.random()}`),text(x.id),productIds.has(text(y.productId))?text(y.productId):null,y.serviceId||null,text(y.name,'بند'),Math.max(.000001,n(y.quantity,1)),Math.max(0,n(y.unitPrice)),0,0,Math.max(0,n(y.quantity,1)*n(y.unitPrice)));
+  }
+
+  const mov=db.prepare('INSERT INTO stock_movements(id,warehouse_id,product_id,movement_type,quantity,reference_type,reference_id,occurred_at) VALUES(?,?,?,?,?,?,?,?)');
+  for(const x of safeArray(collections.transactions)) {
+    if(!productIds.has(text(x.productId))) continue;
+    const wid=warehouseIds.has(text(x.warehouseId))?text(x.warehouseId):(warehouses[0]?.id||'warehouse_default');
+    const mt=x.type==='IN'?'IN':x.type==='SALE_RETURN'?'RETURN_IN':x.type==='PURCHASE_RETURN'?'RETURN_OUT':'OUT';
+    mov.run(text(x.id),wid,text(x.productId),mt,Math.max(.000001,Math.abs(n(x.quantity,1))),'LEGACY_TRANSACTION',null,text(x.date,new Date().toISOString()));
+  }
+  const tr=db.prepare('INSERT INTO warehouse_transfers(id,product_id,from_warehouse_id,to_warehouse_id,quantity,transfer_date,notes,performed_by) VALUES(?,?,?,?,?,?,?,?)');
+  for(const x of safeArray(collections.transfers)) if(productIds.has(text(x.productId))&&warehouseIds.has(text(x.fromWarehouseId))&&warehouseIds.has(text(x.toWarehouseId))) tr.run(text(x.id),text(x.productId),text(x.fromWarehouseId),text(x.toWarehouseId),Math.max(.000001,n(x.quantity,1)),text(x.date,new Date().toISOString()),x.notes||null,x.performedBy||null);
+
+  const ec=db.prepare('INSERT OR IGNORE INTO expense_categories(id,name) VALUES(?,?)');
+  const ex=db.prepare('INSERT INTO expenses(id,category_id,amount,expense_date,description) VALUES(?,?,?,?,?)');
+  for(const x of safeArray(collections.expenses)){ const cid=`expense_${text(x.category,'other')}`; ec.run(cid,text(x.category,'other')); ex.run(text(x.id),cid,Math.max(.000001,n(x.amount)),text(x.date,new Date().toISOString()),x.title||x.notes||null); }
+  const srv=db.prepare('INSERT INTO services(id,name,category,default_price,is_active) VALUES(?,?,?,?,?)');
+  for(const x of safeArray(collections.services)) srv.run(text(x.id),text(x.name,'خدمة'),x.type||null,Math.max(0,n(x.price)),x.status==='DELIVERED'?0:1);
+  const par=db.prepare('INSERT INTO partners(id,name,ownership_percent) VALUES(?,?,?)');
+  for(const x of safeArray(collections.partners)) par.run(text(x.id),text(x.name,'شريك'),Math.min(100,Math.max(0,n(x.equityPercentage))));
+  const dist=db.prepare('INSERT INTO partner_distributions(id,partner_id,partner_name,amount,distribution_date,notes,status) VALUES(?,?,?,?,?,?,?)');
+  for(const x of safeArray(collections.distributions)) dist.run(text(x.id),x.partnerId==='all'?null:x.partnerId||null,text(x.partnerName,'الكل'),Math.max(0,n(x.amount)),text(x.date,new Date().toISOString()),x.notes||null,text(x.status,'PENDING'));
+  const tm=db.prepare('INSERT INTO team_members(id,name,role,phone,active,username,password) VALUES(?,?,?,?,?,?,?)');
+  for(const x of safeArray(collections.teamMembers)) tm.run(text(x.id),text(x.name,'مستخدم'),text(x.role,'cashier'),x.phone||null,x.active===false?0:1,x.username||null,x.password||null);
+  const vou=db.prepare('INSERT INTO financial_vouchers(id,voucher_number,voucher_type,party_type,party_id,amount,voucher_date,payment_method,notes,reference_invoice_id,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)');
+  for(const x of safeArray(collections.vouchers)) vou.run(text(x.id),text(x.voucherNumber,x.id),text(x.type),text(x.partyType),x.partyId||null,Math.max(.000001,n(x.amount)),text(x.date,new Date().toISOString()),text(x.paymentMethod,'CASH'),x.notes||null,x.referenceInvoiceId||null,x.createdBy||null);
+}
+
+
+const COLLECTION_LABEL_FIELDS = {
+  products:['name','code'], categories:['name'], suppliers:['name'], transactions:['invoiceNo','type'],
+  customers:['name'], warehouses:['name'], transfers:['id'], expenses:['title','category'], teamMembers:['name','username'],
+  partners:['name'], distributions:['partnerName','id'], services:['name'], vouchers:['voucherNumber','id'],
+  invoices:['invoiceNo','id'], chatHistory:['title','message','id']
+};
+function collectionItemLabel(name,row) {
+  for (const field of COLLECTION_LABEL_FIELDS[name] || ['name','id']) if (row?.[field]) return String(row[field]);
+  return String(row?.id || name);
+}
+function captureDeletionBatch(collections) {
+  const removed = [];
+  const relatedChanges = [];
+  const currentState = getCollections();
+  // Compare the complete before/after operation state, not only one collection.
+  // This preserves stock, customer balances, invoices and transaction side effects
+  // when the UI sends them together as one operation.
+  const afterState = { ...currentState };
+  for (const [name,value] of Object.entries(collections || {})) {
+    if (CORE_COLLECTIONS.has(name)) afterState[name] = sanitizeCollection(name,value);
+  }
+  for (const name of CORE_COLLECTIONS) {
+    const current = currentState[name] || [];
+    const next = afterState[name] || [];
+    const currentById = new Map(current.filter(x=>x?.id != null).map(x=>[text(x.id),x]));
+    const nextById = new Map(next.filter(x=>x?.id != null).map(x=>[text(x.id),x]));
+    for (const [id,row] of currentById) if (!nextById.has(id)) removed.push({collection:name,row});
+    for (const [id,before] of currentById) {
+      const after=nextById.get(id);
+      if (after && JSON.stringify(before)!==JSON.stringify(after)) relatedChanges.push({collection:name,id,before,after});
+    }
+  }
+  if (!removed.length) return 0;
+  const exists=db.prepare("SELECT 1 FROM deleted_records WHERE entity_type='operation_batch' AND entity_id=? LIMIT 1");
+  const signature=removed.map(x=>`${x.collection}:${text(x.row.id)}`).sort().join('|');
+  if (exists.get(signature)) return 0;
+  const first=removed[0];
+  const label=removed.length===1?collectionItemLabel(first.collection,first.row):`${collectionItemLabel(first.collection,first.row)} (+${removed.length-1})`;
+  db.prepare('INSERT INTO deleted_records(id,entity_type,entity_id,label,payload_json,deleted_at) VALUES(?,?,?,?,?,?)')
+    .run(`bin_${Date.now()}_${Math.random().toString(36).slice(2,8)}`,'operation_batch',signature,label,JSON.stringify({kind:'collection_batch',removed,relatedChanges,restoreMode:'reverse_operation'}),new Date().toISOString());
+  return removed.length;
+}
+
+
+function normalizeUniqueCollectionNames(name, rows) {
+  if (!['categories','warehouses'].includes(name)) return safeArray(rows);
+  const used = new Set();
+  return safeArray(rows).map((row, index) => {
+    const copy = { ...row };
+    const base = text(copy.name, name === 'categories' ? 'غير مصنف' : 'مخزن').trim();
+    let candidate = base;
+    let suffix = 2;
+    while (used.has(candidate.toLocaleLowerCase())) candidate = `${base} (${suffix++})`;
+    used.add(candidate.toLocaleLowerCase());
+    copy.name = candidate;
+    return copy;
+  });
+}
+
+function saveCollectionRows(name, rows) {
+  const clean=normalizeUniqueCollectionNames(name,sanitizeCollection(name,rows));
+  db.prepare(`INSERT INTO app_collections(collection_name,data_json,item_count,revision,updated_at)
+    VALUES(?,?,?,1,CURRENT_TIMESTAMP) ON CONFLICT(collection_name) DO UPDATE SET data_json=excluded.data_json,item_count=excluded.item_count,revision=app_collections.revision+1,updated_at=CURRENT_TIMESTAMP`)
+    .run(name,JSON.stringify(clean),clean.length);
+  return clean;
+}
+function restoreCollectionPayload(payload) {
+  if (payload?.kind === 'collection_batch') {
+    const impacted=new Map();
+    for(const item of payload.removed||[]) {
+      if(!CORE_COLLECTIONS.has(item.collection)||!item.row?.id) continue;
+      const rows=impacted.get(item.collection)||getCollections([item.collection])[item.collection]||[];
+      if(!rows.some(x=>text(x?.id)===text(item.row.id))) rows.push(item.row);
+      impacted.set(item.collection,rows);
+    }
+    for(const change of payload.relatedChanges||[]) {
+      if(!CORE_COLLECTIONS.has(change.collection)) continue;
+      const rows=impacted.get(change.collection)||getCollections([change.collection])[change.collection]||[];
+      const index=rows.findIndex(x=>text(x?.id)===text(change.id));
+      // Never overwrite newer user work: reverse only when the row still equals the post-delete state.
+      if(index>=0 && JSON.stringify(rows[index])===JSON.stringify(change.after)) rows[index]=change.before;
+      impacted.set(change.collection,rows);
+    }
+    const projection={};
+    for(const [name,rows] of impacted) projection[name]=saveCollectionRows(name,rows);
+    // Re-project only the collections affected by the restored operation.
+    // A full relational rebuild deletes parent rows and can violate foreign keys
+    // held by installments, payroll, attendance, or other modules.
+    projectRelationalIncremental(projection);
+    return true;
+  }
+  const name = payload?.collection, row = payload?.row;
+  if (!CORE_COLLECTIONS.has(name) || !row?.id) return false;
+  const stored = getCollections([name])[name] || [];
+  if (!stored.some(x => text(x?.id) === text(row.id))) stored.push(row);
+  const clean=saveCollectionRows(name,stored);
+  projectRelationalIncremental({[name]:clean});
+  return true;
+}
+
+function saveCollections(collections, options={}) {
+  return executeTransaction(() => {
+    const upsert=db.prepare(`INSERT INTO app_collections(collection_name,data_json,item_count,revision,updated_at)
+      VALUES(?,?,?,1,CURRENT_TIMESTAMP) ON CONFLICT(collection_name) DO UPDATE SET data_json=excluded.data_json,item_count=excluded.item_count,revision=app_collections.revision+1,updated_at=CURRENT_TIMESTAMP`);
+    if(options.trackDeletes) captureDeletionBatch(collections);
+    const clean={};
+    for(const [name,value] of Object.entries(collections||{})) {
+      if(!CORE_COLLECTIONS.has(name)) continue;
+      clean[name]=sanitizeCollection(name,value);
+      upsert.run(name,JSON.stringify(clean[name]),clean[name].length);
+    }
+    if(options.projectRelational!==false) {
+      if(options.fullRebuild) replaceRelationalProjection({...getCollections(),...clean});
+      else projectRelationalIncremental(clean);
+    }
+    if(options.markMigrated) db.prepare('INSERT OR IGNORE INTO schema_migrations(version) VALUES(2)').run();
+    return Object.fromEntries(Object.entries(clean).map(([k,v])=>[k,v.length]));
+  });
+}
+
+
+
+function savePayrollEmployee(data={}) {
+  const id=text(data.id,`payemp_${Date.now()}_${Math.random().toString(36).slice(2,7)}`);
+  db.prepare(`INSERT INTO payroll_employees(id,team_member_id,name,job_title,employee_role,phone,base_salary,hourly_rate,overtime_rate,standard_daily_hours,standard_monthly_days,attendance_employee_id,active)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET team_member_id=excluded.team_member_id,name=excluded.name,job_title=excluded.job_title,employee_role=excluded.employee_role,phone=excluded.phone,base_salary=excluded.base_salary,hourly_rate=excluded.hourly_rate,overtime_rate=excluded.overtime_rate,standard_daily_hours=excluded.standard_daily_hours,standard_monthly_days=excluded.standard_monthly_days,attendance_employee_id=excluded.attendance_employee_id,active=excluded.active,updated_at=CURRENT_TIMESTAMP`)
+    .run(id,data.teamMemberId||null,text(data.name,'موظف'),data.jobTitle||null,data.employeeRole||null,data.phone||null,Math.max(0,Number(data.baseSalary)||0),Math.max(0,Number(data.hourlyRate)||0),Math.max(0,Number(data.overtimeRate)||0),Math.max(.1,Number(data.standardDailyHours)||8),Math.max(1,Number(data.standardMonthlyDays)||30),data.attendanceEmployeeId||data.teamMemberId||id,data.active===false?0:1);
+  invalidateQueryCache(); return {id};
+}
+function addPayrollAdjustment(data={}) {
+  const type=['ALLOWANCE','DEDUCTION','BONUS','LOAN','OTHER'].includes(data.adjustmentType)?data.adjustmentType:'OTHER';
+  const id=text(data.id,`adj_${Date.now()}_${Math.random().toString(36).slice(2,7)}`);
+  db.prepare(`INSERT INTO payroll_adjustments(id,employee_id,month,adjustment_type,amount,description) VALUES(?,?,?,?,?,?)`)
+    .run(id,text(data.employeeId),text(data.month,new Date().toISOString().slice(0,7)),type,Math.max(0,Number(data.amount)||0),data.description||null);
+  invalidateQueryCache(); return {id};
+}
+function generatePayrollRun(data={}) {
+  return executeTransaction(()=>{
+    const month=text(data.month,new Date().toISOString().slice(0,7));
+    const start=`${month}-01`; const [y,m]=month.split('-').map(Number); const end=new Date(Date.UTC(y,m,0)).toISOString().slice(0,10);
+    const runId=text(data.id,`payrun_${month}`); const generatedAt=new Date().toISOString();
+    db.prepare(`INSERT INTO payroll_runs(id,month,status,generated_at,notes) VALUES(?,?,'DRAFT',?,?) ON CONFLICT(month) DO UPDATE SET generated_at=excluded.generated_at,notes=excluded.notes,status='DRAFT'`).run(runId,month,generatedAt,data.notes||null);
+    const actualRun=db.prepare('SELECT id FROM payroll_runs WHERE month=?').get(month).id;
+    db.prepare('DELETE FROM payroll_items WHERE run_id=?').run(actualRun);
+    const employees=db.prepare('SELECT * FROM payroll_employees WHERE active=1 ORDER BY name').all();
+    const adjustments=db.prepare('SELECT * FROM payroll_adjustments WHERE month=?').all(month);
+    const itemStmt=db.prepare(`INSERT INTO payroll_items(id,run_id,employee_id,employee_name,base_salary,allowances,bonuses,overtime_hours,overtime_amount,absence_days,absence_deduction,deductions,loans,gross_salary,net_salary,worked_hours,attendance_days,snapshot_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    let grossTotal=0,deductionsTotal=0,netTotal=0;
+    for(const e of employees){
+      const att=db.prepare(`SELECT substr(event_time,1,10) day,
+        MIN(CASE WHEN event_type='CHECK_IN' THEN event_time END) first_in,
+        MAX(CASE WHEN event_type='CHECK_OUT' THEN event_time END) last_out
+        FROM attendance_records WHERE employee_id=? AND substr(event_time,1,10) BETWEEN ? AND ? GROUP BY substr(event_time,1,10)`).all(e.attendance_employee_id||e.id,start,end);
+      let worked=0,days=0; for(const r of att){ if(r.first_in){days++; if(r.last_out) worked+=(new Date(r.last_out)-new Date(r.first_in))/3600000; } }
+      const expected=Math.max(0,Number(e.standard_daily_hours)||8)*days; const overtimeHours=Math.max(0,worked-expected);
+      const overtimeAmount=overtimeHours*(Number(e.overtime_rate)||Number(e.hourly_rate)||0);
+      const absenceDays=Math.max(0,(Number(e.standard_monthly_days)||30)-days);
+      const absenceDeduction=(Number(e.base_salary)||0)/(Number(e.standard_monthly_days)||30)*absenceDays;
+      const own=adjustments.filter(a=>a.employee_id===e.id); const sum=t=>own.filter(a=>a.adjustment_type===t).reduce((v,a)=>v+Number(a.amount||0),0);
+      const allowances=sum('ALLOWANCE')+sum('OTHER'), bonuses=sum('BONUS'), deductions=sum('DEDUCTION'), loans=sum('LOAN');
+      const gross=(Number(e.base_salary)||0)+allowances+bonuses+overtimeAmount; const totalDed=absenceDeduction+deductions+loans; const net=Math.max(0,gross-totalDed);
+      itemStmt.run(`payitem_${actualRun}_${e.id}`,actualRun,e.id,e.name,e.base_salary,allowances,bonuses,overtimeHours,overtimeAmount,absenceDays,absenceDeduction,deductions,loans,gross,net,worked,days,JSON.stringify({employee:e,adjustments:own,period:{start,end}}));
+      grossTotal+=gross; deductionsTotal+=totalDed; netTotal+=net;
+    }
+    db.prepare('UPDATE payroll_runs SET gross_total=?,deductions_total=?,net_total=? WHERE id=?').run(grossTotal,deductionsTotal,netTotal,actualRun);
+    invalidateQueryCache(); return {id:actualRun,month,employees:employees.length,grossTotal,deductionsTotal,netTotal};
+  });
+}
+function setPayrollRunStatus(data={}) {
+  const status=['DRAFT','APPROVED','PAID'].includes(data.status)?data.status:'DRAFT'; const now=new Date().toISOString();
+  db.prepare(`UPDATE payroll_runs SET status=?,approved_at=CASE WHEN ?='APPROVED' THEN ? ELSE approved_at END,paid_at=CASE WHEN ?='PAID' THEN ? ELSE paid_at END WHERE id=?`).run(status,status,now,status,now,text(data.id));
+  invalidateQueryCache(); return {ok:true};
+}
+function getPayrollRun(id) { const run=db.prepare('SELECT * FROM payroll_runs WHERE id=? OR month=?').get(text(id),text(id)); if(!run)return null; return {...run,items:db.prepare('SELECT * FROM payroll_items WHERE run_id=? ORDER BY employee_name').all(run.id)}; }
+
+function saveAttendanceDevice(data={}) {
+  const id=text(data.id,`device_${Date.now()}`);
+  db.prepare(`INSERT INTO attendance_devices(id,name,device_type,connection_type,host,port,serial_number,branch,enabled,last_sync_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,device_type=excluded.device_type,connection_type=excluded.connection_type,host=excluded.host,port=excluded.port,serial_number=excluded.serial_number,branch=excluded.branch,enabled=excluded.enabled,last_sync_at=excluded.last_sync_at`)
+    .run(id,text(data.name,'جهاز بصمة'),text(data.deviceType,'GENERIC'),text(data.connectionType,'CSV'),data.host||null,Number(data.port)||null,data.serialNumber||null,data.branch||null,data.enabled===false?0:1,data.lastSyncAt||null);
+  invalidateQueryCache(); return {id};
+}
+function recordAttendance(data={}) {
+  const eventType=['CHECK_IN','CHECK_OUT','BREAK_START','BREAK_END'].includes(data.eventType)?data.eventType:'CHECK_IN';
+  const id=text(data.id,`att_${Date.now()}_${Math.random().toString(36).slice(2,8)}`);
+  db.prepare(`INSERT OR IGNORE INTO attendance_records(id,employee_id,employee_name,event_type,event_time,source,device_id,signature_data,notes) VALUES(?,?,?,?,?,?,?,?,?)`)
+    .run(id,text(data.employeeId),text(data.employeeName,'موظف'),eventType,text(data.eventTime,new Date().toISOString()),text(data.source,'MANUAL'),data.deviceId||null,data.signatureData||null,data.notes||null);
+  if(data.signatureData) saveEmployeeSignature({employeeId:data.employeeId,employeeName:data.employeeName,signatureData:data.signatureData,purpose:'ATTENDANCE'});
+  invalidateQueryCache(); return {id};
+}
+function importAttendanceRows(rows=[]) { return executeTransaction(()=>{ let imported=0, skipped=0; for(const row of safeArray(rows)){ try { const before=db.prepare('SELECT COUNT(*) c FROM attendance_records').get().c; recordAttendance(row); const after=db.prepare('SELECT COUNT(*) c FROM attendance_records').get().c; after>before?imported++:skipped++; } catch { skipped++; } } return {imported,skipped}; }); }
+function saveEmployeeSignature(data={}) {
+  db.prepare(`INSERT INTO employee_signatures(employee_id,employee_name,signature_data,signed_at,purpose) VALUES(?,?,?,?,?) ON CONFLICT(employee_id) DO UPDATE SET employee_name=excluded.employee_name,signature_data=excluded.signature_data,signed_at=excluded.signed_at,purpose=excluded.purpose,updated_at=CURRENT_TIMESTAMP`)
+    .run(text(data.employeeId),text(data.employeeName,'موظف'),text(data.signatureData),text(data.signedAt,new Date().toISOString()),text(data.purpose,'ATTENDANCE'));
+  invalidateQueryCache(); return {ok:true};
+}
+function attendanceSummary({dateFrom,dateTo}={}) {
+  const from=text(dateFrom,new Date().toISOString().slice(0,10)); const to=text(dateTo,from);
+  const rows=db.prepare(`SELECT employee_id,employee_name,
+    MIN(CASE WHEN event_type='CHECK_IN' THEN event_time END) first_in,
+    MAX(CASE WHEN event_type='CHECK_OUT' THEN event_time END) last_out,
+    COUNT(*) events FROM attendance_records WHERE substr(event_time,1,10) BETWEEN ? AND ? GROUP BY employee_id,employee_name ORDER BY employee_name`).all(from,to);
+  return rows.map(r=>({...r,worked_hours:r.first_in&&r.last_out?Math.max(0,(new Date(r.last_out)-new Date(r.first_in))/3600000):0}));
+}
+
+function batchSaveCollections(collectionBatches, options={}) {
+  const merged = {};
+  for (const batch of collectionBatches || []) for (const [key, rows] of Object.entries(batch || {})) merged[key] = (merged[key] || []).concat(safeArray(rows));
+  return saveCollections(merged, options);
+}
+function enqueueSyncChange({ entityType, entityId, operation, payload }) {
+  const result = cachedPrepare('INSERT INTO sync_queue(entity_type,entity_id,operation,payload_json) VALUES(?,?,?,?)').run(text(entityType),text(entityId),operation === 'DELETE' ? 'DELETE' : 'UPSERT',payload == null ? null : JSON.stringify(payload));
+  invalidateQueryCache(); return { id: Number(result.lastInsertRowid) };
+}
+function optimizeDatabase() {
+  db.exec('PRAGMA optimize; PRAGMA wal_checkpoint(PASSIVE); PRAGMA incremental_vacuum(200);');
+  invalidateQueryCache();
+  return { ok: true, stats: stats() };
+}
+function pendingSync({page=1,pageSize=100}={}) { return list({table:'sync_queue',page,pageSize,orderBy:'created_at',direction:'ASC'}); }
+
+function exportSnapshot() {
+  return { version:2, exportedAt:new Date().toISOString(), collections:getCollections(), stats:stats() };
+}
+function importSnapshot(snapshot) {
+  if(!snapshot || !snapshot.collections) throw new Error('Invalid database snapshot');
+  return saveCollections(snapshot.collections,{projectRelational:true,fullRebuild:true,markMigrated:true});
+}
+
+module.exports = { savePayrollEmployee, addPayrollAdjustment, generatePayrollRun, setPayrollRunStatus, getPayrollRun, saveAttendanceDevice, recordAttendance, importAttendanceRows, saveEmployeeSignature, attendanceSummary, hashPassword, verifyPassword, openDatabase, closeDatabase, list, createQuotation, updateQuotation, getQuotation, updateQuotationStatus, createInstallment, collectInstallment, softDelete, restoreDeleted, purgeDeleted, importLegacy, stats, getCollections, saveCollections, batchSaveCollections, enqueueSyncChange, pendingSync, optimizeDatabase, hasMigratedLegacy, exportSnapshot, importSnapshot };

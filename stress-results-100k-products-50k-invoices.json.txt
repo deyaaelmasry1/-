@@ -1,0 +1,43 @@
+
+> react-example@1.0.0 stress:db
+> node scripts/stress-database.cjs
+
+{
+  "productCount": 100000,
+  "invoiceCount": 50000,
+  "productPageCount": 111,
+  "invoicePageCount": 1111,
+  "pendingSync": 1000,
+  "backupCollections": 15,
+  "databaseBytes": 61591552,
+  "timings": [
+    {
+      "name": "open+migrate",
+      "ms": 23.73
+    },
+    {
+      "name": "bulk-save",
+      "ms": 6252.61
+    },
+    {
+      "name": "product-search-page",
+      "ms": 130.69
+    },
+    {
+      "name": "invoice-search-page",
+      "ms": 62.46
+    },
+    {
+      "name": "backup-export",
+      "ms": 532.88
+    },
+    {
+      "name": "offline-sync-queue-read",
+      "ms": 3.62
+    },
+    {
+      "name": "checkpoint-optimize",
+      "ms": 51.75
+    }
+  ]
+}

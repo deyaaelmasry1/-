@@ -1,0 +1,6 @@
+{
+  "name": "مدير المخازن الخاص بي - My Store Manager",
+  "description": "A comprehensive bilingual (Arabic/English) offline-first warehouse and inventory manager featuring inventory tracking, stock movements (In/Out), supplier directory, report generation, CSV data backups, invoice printing, and an AI Stock Advisor powered by Gemini.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

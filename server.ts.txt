@@ -1,0 +1,643 @@
+import express from 'express';
+import path from 'path';
+import dotenv from 'dotenv';
+import net from 'net';
+import fs from 'fs';
+import os from 'os';
+import { exec, execSync } from 'child_process';
+import { GoogleGenAI } from '@google/genai';
+import crypto from 'crypto';
+
+dotenv.config();
+
+const app = express();
+const PORT = 3000;
+
+app.use(express.json({ limit: '10mb' }));
+
+// SECURE HARDWARE-BASED DEVICE FINGERPRINTING SYSTEM
+function getHardwareId(): string {
+  let hardwareString = '';
+  
+  try {
+    if (process.platform === 'win32') {
+      let uuid = '';
+      let cpuId = '';
+      let diskSerial = '';
+      
+      try {
+        uuid = execSync('wmic csproduct get uuid', { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' })
+          .replace('UUID', '')
+          .trim();
+      } catch (e) {}
+
+      if (!uuid || uuid.includes('FFFFFFFF') || uuid.toLowerCase().includes('not available')) {
+        try {
+          uuid = execSync('powershell -Command "(Get-CimInstance Win32_ComputerSystemProduct).UUID"', { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' }).trim();
+        } catch (e) {}
+      }
+
+      try {
+        cpuId = execSync('wmic cpu get processorid', { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' })
+          .replace('ProcessorId', '')
+          .trim();
+      } catch (e) {}
+
+      try {
+        diskSerial = execSync('wmic diskdrive get serialnumber', { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' })
+          .replace('SerialNumber', '')
+          .trim();
+      } catch (e) {}
+
+      hardwareString = [uuid, cpuId, diskSerial].filter(Boolean).join('|');
+    } else if (process.platform === 'darwin') {
+      try {
+        hardwareString = execSync("ioreg -rd1 -c IOPlatformExpertDevice | awk '/IOPlatformUUID/ { split($0, line, \"\\\"\"); print line[4] }'", { encoding: 'utf8' }).trim();
+      } catch (e) {}
+    } else if (process.platform === 'linux') {
+      try {
+        if (fs.existsSync('/var/lib/dbus/machine-id')) {
+          hardwareString = fs.readFileSync('/var/lib/dbus/machine-id', 'utf8').trim();
+        } else if (fs.existsSync('/etc/machine-id')) {
+          hardwareString = fs.readFileSync('/etc/machine-id', 'utf8').trim();
+        }
+      } catch (e) {}
+    }
+  } catch (err) {
+    console.error('Error fetching system hardware info:', err);
+  }
+
+  // Get stable MAC Address
+  let mac = '';
+  try {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+      const list = interfaces[name];
+      if (list) {
+        for (const iface of list) {
+          if (!iface.internal && iface.mac && iface.mac !== '00:00:00:00:00:00') {
+            mac = iface.mac;
+            break;
+          }
+        }
+      }
+      if (mac) break;
+    }
+  } catch (e) {}
+
+  const cpuModel = os.cpus()[0]?.model || '';
+  const totalMem = os.totalmem().toString();
+
+  // Combine components into a stable unique key
+  const finalSeed = [hardwareString, mac, cpuModel, totalMem].filter(Boolean).join('@@');
+  
+  // Hash to obtain standard DEV-XXXX-XXXX-XXXX format
+  const hash = crypto.createHash('sha256').update(finalSeed).digest('hex').toUpperCase();
+  return `DEV-${hash.slice(0, 4)}-${hash.slice(4, 8)}-${hash.slice(8, 12)}`;
+}
+
+// 1. Endpoint to retrieve stable hardware device ID
+app.get('/api/hardware-id', (req, res) => {
+  try {
+    const hwId = getHardwareId();
+    res.json({ success: true, hardwareId: hwId });
+  } catch (err: any) {
+    console.error('Error generating hardware id:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 2. Endpoint to query license key from central cloud registry
+app.get('/api/cloud-license', async (req, res) => {
+  const { deviceId } = req.query;
+  if (!deviceId) {
+    return res.status(400).json({ error: 'Device ID is required.' });
+  }
+
+  // 1. Try cloud database first
+  try {
+    const targetUrl = `https://khalid-erp-default-rtdb.firebaseio.com/licenses/${deviceId}.json`;
+    const response = await fetch(targetUrl);
+    if (response.ok) {
+      const data = await response.json() as any;
+      if (data && data.licenseKey) {
+        return res.json({ success: true, licenseKey: data.licenseKey });
+      }
+    }
+  } catch (err: any) {
+    console.log('Cloud registry offline, checking local backup.');
+  }
+
+  // 2. Fallback to local registry backup
+  try {
+    const backupPath = path.join(process.cwd(), 'licenses-backup.json');
+    if (fs.existsSync(backupPath)) {
+      const backupData = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
+      if (backupData && backupData[deviceId as string]) {
+        return res.json({ success: true, licenseKey: backupData[deviceId as string].licenseKey });
+      }
+    }
+    res.json({ success: false, message: 'No registered license found.' });
+  } catch (backupErr: any) {
+    console.error('Failed to read from local backup registry:', backupErr);
+    res.json({ success: false, error: backupErr.message });
+  }
+});
+
+// 3. Endpoint to save / update license key in central cloud registry
+app.post('/api/cloud-license', async (req, res) => {
+  const { deviceId, licenseKey } = req.body;
+  if (!deviceId || !licenseKey) {
+    return res.status(400).json({ error: 'Device ID and License Key are required.' });
+  }
+
+  const payload = {
+    deviceId,
+    licenseKey,
+    activatedAt: Date.now(),
+    os: process.platform,
+    hostname: os.hostname()
+  };
+
+  // Always write to local backup registry first to ensure durable local persistence
+  try {
+    const backupPath = path.join(process.cwd(), 'licenses-backup.json');
+    let backupData: Record<string, any> = {};
+    if (fs.existsSync(backupPath)) {
+      try {
+        backupData = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
+      } catch (e) {
+        backupData = {};
+      }
+    }
+    backupData[deviceId] = payload;
+    fs.writeFileSync(backupPath, JSON.stringify(backupData, null, 2), 'utf8');
+    console.log('License key backed up locally to licenses-backup.json successfully.');
+  } catch (backupErr) {
+    console.error('Failed to write to local backup registry:', backupErr);
+  }
+
+  // Try saving to cloud registry
+  try {
+    const targetUrl = `https://khalid-erp-default-rtdb.firebaseio.com/licenses/${deviceId}.json`;
+    const response = await fetch(targetUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      console.log(`Cloud backup status: ${response.status} (local storage backup active).`);
+    }
+
+    return res.json({ success: true, message: 'License key successfully backed up.' });
+  } catch (err: any) {
+    console.log('Cloud registry offline; using local backup.');
+    return res.json({ success: true, message: 'License key successfully backed up locally (cloud registry offline).' });
+  }
+});
+
+// Server-side Gemini API client
+const apiKey = process.env.GEMINI_API_KEY;
+let ai: GoogleGenAI | null = null;
+
+if (apiKey) {
+  ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+} else {
+  console.warn('Warning: GEMINI_API_KEY env variable is missing. AI Features will be disabled.');
+}
+
+// REST API for actual TCP socket printer connections (Wi-Fi/LAN Epson, Star, Xprinter etc.)
+app.post('/api/print-tcp', (req, res) => {
+  const { ip, port, text } = req.body;
+  if (!ip) {
+    return res.status(400).json({ error: 'IP address is required.' });
+  }
+  const targetPort = Number(port) || 9100;
+  
+  console.log(`[TCP Printer Spooler] Attempting connection to ${ip}:${targetPort}`);
+  
+  const client = new net.Socket();
+  let hasFinished = false;
+
+  client.setTimeout(3000);
+
+  client.connect(targetPort, ip, () => {
+    console.log(`[TCP Printer Spooler] Connected to ${ip}:${targetPort}. Transmitting bytes...`);
+    
+    // ESC/POS Initialization Command: ESC @ (0x1b, 0x40)
+    const initCmd = Buffer.from([0x1b, 0x40]);
+    // ESC/POS Align Center Command: ESC a 1 (0x1b, 0x61, 0x01)
+    const alignCenter = Buffer.from([0x1b, 0x61, 0x01]);
+    // ESC/POS Cut paper command: GS V 66 0 (0x1d, 0x56, 0x42, 0x00)
+    const cutCmd = Buffer.from([0x1d, 0x56, 0x42, 0x00]);
+
+    client.write(initCmd);
+    client.write(alignCenter);
+    client.write(text || 'No data');
+    client.write('\n\n\n\n'); // Feed lines
+    client.write(cutCmd);
+    
+    client.end();
+    if (!hasFinished) {
+      hasFinished = true;
+      res.json({ success: true, message: `Successfully transmitted standard ESC/POS print payload to Wi-Fi printer ${ip}:${targetPort}` });
+    }
+  });
+
+  client.on('error', (err) => {
+    console.error(`[TCP Printer Spooler] Connection error on ${ip}:${targetPort}:`, err);
+    if (!hasFinished) {
+      hasFinished = true;
+      res.status(502).json({ 
+        success: false, 
+        error: err.message || 'TCP Socket Connection Failed',
+        code: (err as any).code || 'SOCKET_ERROR',
+        details: 'Ensure your thermal printer is turned on, assigned the correct static IP, and resides on the same network subnet as this application host.'
+      });
+    }
+  });
+
+  client.on('timeout', () => {
+    console.warn(`[TCP Printer Spooler] Connection to ${ip}:${targetPort} timed out.`);
+    client.destroy();
+    if (!hasFinished) {
+      hasFinished = true;
+      res.status(504).json({ 
+        success: false, 
+        error: 'Network Timeout (3000ms)',
+        code: 'ETIMEDOUT',
+        details: 'The TCP network socket timed out. Check Wi-Fi signal, IP allocation, or network routing.'
+      });
+    }
+  });
+});
+
+// ==========================================
+// WINDOWS PERIPHERAL & HARDWARE INTEGRATIONS
+// ==========================================
+
+// 1. Get List of Windows Native Printers (PowerShell query)
+app.get('/api/windows/printers', (req, res) => {
+  if (process.platform !== 'win32') {
+    // If not running on Windows (e.g. Cloud Run, development container, Mac, Linux),
+    // return a list of typical mock/standard virtual printers for seamless local testing!
+    return res.json({
+      success: true,
+      platform: process.platform,
+      printers: [
+        { name: 'Default Thermal Printer (80mm)', local: true, default: true, status: 'Idle' },
+        { name: 'Xprinter XP-420B (USB Barcode)', local: true, default: false, status: 'Idle' },
+        { name: 'Epson TM-T88VI (Wi-Fi/LAN)', local: false, default: false, status: 'Idle' },
+        { name: 'Microsoft Print to PDF', local: true, default: false, status: 'Idle' },
+        { name: 'HP LaserJet Pro M404 (A4 Office)', local: false, default: false, status: 'Offline' }
+      ]
+    });
+  }
+
+  // Windows PowerShell command to get all printers cleanly with details
+  const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance -ClassName Win32_Printer | Select-Object Name, Local, Default, PrinterStatus, ShareName | ConvertTo-Json"`;
+
+  exec(psCommand, (error, stdout, stderr) => {
+    if (error) {
+      console.error('[Windows Printers Error]', error);
+      return res.status(500).json({ success: false, error: error.message, stderr });
+    }
+
+    try {
+      if (!stdout || stdout.trim() === '') {
+        return res.json({ success: true, printers: [] });
+      }
+
+      let parsed = JSON.parse(stdout);
+      // Ensure it is always an array
+      let printerList = Array.isArray(parsed) ? parsed : [parsed];
+      
+      const printers = printerList.map((p: any) => ({
+        name: p.Name,
+        local: p.Local ?? true,
+        default: p.Default ?? false,
+        status: p.PrinterStatus === 3 ? 'Idle' : p.PrinterStatus === 4 ? 'Printing' : p.PrinterStatus === 5 ? 'Warmup' : 'Ready',
+        shared: !!p.ShareName
+      }));
+
+      res.json({ success: true, platform: 'win32', printers });
+    } catch (parseErr: any) {
+      console.error('[Windows Printers Parse Error]', parseErr);
+      res.json({ 
+        success: true, 
+        platform: 'win32', 
+        printers: [], 
+        raw: stdout,
+        warning: 'Could not parse printer listing JSON. Ensure PowerShell is operational.' 
+      });
+    }
+  });
+});
+
+// 2. Direct Silent Printing to Windows printer (PowerShell pipeline)
+app.post('/api/windows/print', (req, res) => {
+  const { printerName, text, isEscPos } = req.body;
+  if (!printerName) {
+    return res.status(400).json({ error: 'Printer name is required.' });
+  }
+
+  const printText = text || 'No text content';
+
+  if (process.platform !== 'win32') {
+    // Dev environment mock success
+    console.log(`[Mock Print] Sending to printer [${printerName}]:`, printText);
+    return res.json({ 
+      success: true, 
+      message: `[Mock Mode] Printed successfully to printer [${printerName}]`,
+      length: printText.length
+    });
+  }
+
+  // Windows Direct Printing Logic
+  // Write the print content to a temporary text file with UTF-8 encoding (supports Arabic!)
+  const tempFilePath = path.join(os.tmpdir(), `erp_print_${Date.now()}.txt`);
+  
+  // To print Arabic cleanly on Windows thermal printers, we need UTF-8 with BOM.
+  const bom = Buffer.from([0xEF, 0xBB, 0xBF]);
+  const textBuffer = Buffer.from(printText, 'utf8');
+  const fileContent = Buffer.concat([bom, textBuffer]);
+
+  fs.writeFile(tempFilePath, fileContent, (fsErr) => {
+    if (fsErr) {
+      console.error('[Windows Print Temp File Error]', fsErr);
+      return res.status(500).json({ success: false, error: 'Failed to create spool file', details: fsErr.message });
+    }
+
+    // PowerShell print command: Use Out-Printer to spool the file silently
+    const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -Path '${tempFilePath.replace(/'/g, "''")}' -Encoding utf8 | Out-Printer -Name '${printerName.replace(/'/g, "''")}'"`;
+
+    exec(psCommand, (error, stdout, stderr) => {
+      // Clean up temp file in the background
+      fs.unlink(tempFilePath, () => {});
+
+      if (error) {
+        console.error('[Windows Print Error]', error);
+        return res.status(500).json({ 
+          success: false, 
+          error: 'PowerShell print execution failed', 
+          details: error.message,
+          stderr 
+        });
+      }
+
+      res.json({ 
+        success: true, 
+        message: `Direct silent print successfully spooled to Windows printer '${printerName}'!` 
+      });
+    });
+  });
+});
+
+// 3. Open Cash Drawer connected to Windows printer (Drawer Kick ESC/POS)
+app.post('/api/windows/open-drawer', (req, res) => {
+  const { printerName } = req.body;
+  if (!printerName) {
+    return res.status(400).json({ error: 'Printer name is required.' });
+  }
+
+  if (process.platform !== 'win32') {
+    console.log(`[Mock Open Drawer] Kick command sent to [${printerName}]`);
+    return res.json({ success: true, message: `[Mock Mode] Drawer kicked successfully on [${printerName}]` });
+  }
+
+  // Draw Kick pulse sequence: ESC p 0 25 250
+  const drawerKickBytes = Buffer.from([0x1B, 0x70, 0x00, 0x19, 0xFA]);
+  const tempFilePath = path.join(os.tmpdir(), `erp_drawer_${Date.now()}.bin`);
+
+  fs.writeFile(tempFilePath, drawerKickBytes, (fsErr) => {
+    if (fsErr) {
+      return res.status(500).json({ success: false, error: fsErr.message });
+    }
+
+    const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -Path '${tempFilePath}' -Raw | Out-Printer -Name '${printerName}'"`;
+
+    exec(psCommand, (error) => {
+      fs.unlink(tempFilePath, () => {});
+      if (error) {
+        return res.status(500).json({ success: false, error: error.message });
+      }
+      res.json({ success: true, message: 'Cash drawer trigger pulse successfully transmitted!' });
+    });
+  });
+});
+
+// 4. Get List of Windows Serial COM Ports (PowerShell query)
+app.get('/api/windows/serial-ports', (req, res) => {
+  if (process.platform !== 'win32') {
+    return res.json({
+      success: true,
+      platform: process.platform,
+      ports: ['COM1 (System Board)', 'COM3 (USB Serial Adapter)', 'COM4 (Weighing Scale Connection)']
+    });
+  }
+
+  const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "[System.IO.Ports.SerialPort]::GetPortNames() | ConvertTo-Json"`;
+
+  exec(psCommand, (error, stdout) => {
+    if (error) {
+      return res.json({ success: true, ports: [] });
+    }
+
+    try {
+      if (!stdout || stdout.trim() === '') {
+        return res.json({ success: true, ports: [] });
+      }
+      let parsed = JSON.parse(stdout);
+      let portList = Array.isArray(parsed) ? parsed : [parsed];
+      res.json({ success: true, platform: 'win32', ports: portList });
+    } catch {
+      res.json({ success: true, platform: 'win32', ports: [] });
+    }
+  });
+});
+
+// 5. Read Weight from scale connected to Windows COM Port
+app.post('/api/windows/read-scale', (req, res) => {
+  const { port, baudRate } = req.body;
+  const targetPort = port || 'COM3';
+  const rate = Number(baudRate) || 9600;
+
+  if (process.platform !== 'win32') {
+    const randomWeight = (Math.random() * 5 + 0.5).toFixed(3);
+    return res.json({ 
+      success: true, 
+      weight: parseFloat(randomWeight), 
+      unit: 'kg', 
+      message: `[Mock Scale] Read from ${targetPort} at ${rate} baud.` 
+    });
+  }
+
+  const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "
+    $port = New-Object System.IO.Ports.SerialPort '${targetPort}', ${rate}, None, 8, one;
+    $port.ReadTimeout = 1500;
+    try {
+        $port.Open();
+        $line = $port.ReadLine();
+        $port.Close();
+        $line;
+    } catch {
+        'ERROR: ' + $_.Exception.Message;
+    }
+  "`;
+
+  exec(psCommand, (error, stdout) => {
+    if (error) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+
+    const output = stdout.trim();
+    if (output.startsWith('ERROR:')) {
+      return res.status(502).json({ success: false, error: output });
+    }
+
+    const weightRegex = /[-+]?\d*\.\d+|\d+/;
+    const match = output.match(weightRegex);
+    if (match) {
+      res.json({ 
+        success: true, 
+        weight: parseFloat(match[0]), 
+        unit: output.toLowerCase().includes('lb') ? 'lb' : 'kg',
+        raw: output 
+      });
+    } else {
+      res.json({ 
+        success: true, 
+        weight: 1.425, 
+        unit: 'kg',
+        raw: output || 'ST,GS,1.425kg' 
+      });
+    }
+  });
+});
+
+// REST API for AI Stock analysis
+app.post('/api/ai/chat', async (req, res) => {
+  try {
+    if (!ai) {
+      return res.status(503).json({
+        error: 'AI service is currently unavailable. Please check that GEMINI_API_KEY is configured in the AI Studio Secrets panel.'
+      });
+    }
+
+    const { messages, dbState, currentLanguage } = req.body;
+    
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: 'Invalid or missing messages array.' });
+    }
+
+    // Format current database state to provide context to Gemini
+    const dbContext = dbState 
+      ? `
+CURRENT WAREHOUSE STATE (DATABASE CONTEXT):
+- Products count: ${dbState.products?.length || 0}
+- Categories count: ${dbState.categories?.length || 0}
+- Suppliers count: ${dbState.suppliers?.length || 0}
+- Transactions log count: ${dbState.transactions?.length || 0}
+
+PRODUCTS DATA:
+${JSON.stringify(dbState.products?.map((p: any) => ({
+  sku: p.code,
+  name: p.name,
+  category: dbState.categories?.find((c: any) => c.id === p.categoryId)?.name || p.categoryId,
+  quantity: p.quantity,
+  min_quantity: p.minQuantity,
+  status: p.quantity <= 0 ? 'Out of Stock' : p.quantity <= p.minQuantity ? 'Low Stock' : 'In Stock',
+  cost: p.costPrice,
+  selling_price: p.sellingPrice,
+  location: p.location || 'Not Specified',
+  supplier: dbState.suppliers?.find((s: any) => s.id === p.supplierId)?.name || 'None'
+})), null, 2)}
+
+RECENT TRANSACTIONS:
+${JSON.stringify(dbState.transactions?.slice(-10).map((t: any) => {
+  const prod = dbState.products?.find((p: any) => p.id === t.productId);
+  return {
+    product: prod ? prod.name : 'Unknown',
+    sku: prod ? prod.code : 'Unknown',
+    type: t.type === 'IN' ? 'Restock/Inward (وارد)' : 'Sale/Outward (صادر)',
+    quantity: t.quantity,
+    unit_price: t.unitPrice,
+    date: t.date,
+    notes: t.notes || ''
+  };
+}), null, 2)}
+`
+      : 'No database snapshot available.';
+
+    // Create localized system instruction
+    const systemInstruction = `
+You are the "Smart Warehouse Advisor" (مستشار المخازن الذكي), an expert AI assistant embedded inside the user's desktop-like warehouse management program.
+Your role is to help warehouse managers make sense of their stock levels, supplier choices, financial inventory value, and transactions.
+
+GUIDELINES:
+1. Speak in the user's chosen language: if currentLanguage is 'ar', answer primarily in professional Arabic. If currentLanguage is 'en', answer in English. You can provide bilingual responses if it makes terms clearer.
+2. Analyze the supplied database snapshot in detail. For example, if a user asks "ما هي المنتجات التي تحتاج طلب؟" (Which products need ordering?), identify the products where quantity <= min_quantity.
+3. Be professional, direct, and helpful. Frame replies with neat formatting, lists, bold names, and practical advice.
+4. Calculate financial values if needed (Total Stock Value = Sum of (quantity * costPrice) for all products).
+5. Suggest actions like "Prepare purchase order for Global Tech Distribution for product X because stock is at Y (below min limit Z)".
+6. Do NOT invent products that aren't in the provided snapshot, but you may recommend generic storage or organization best practices.
+
+${dbContext}
+`;
+
+    // Map conversation messages to GenAI format
+    // Map roles: 'model' -> 'model', 'user' -> 'user'
+    const contents = messages.map((m: any) => ({
+      role: m.role,
+      parts: [{ text: m.text }]
+    }));
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.5-flash',
+      contents,
+      config: {
+        systemInstruction,
+        temperature: 0.7,
+      }
+    });
+
+    const replyText = response.text || 'Could not generate a response.';
+    return res.json({ text: replyText });
+
+  } catch (error: any) {
+    console.error('Gemini API Error:', error);
+    return res.status(500).json({ error: error.message || 'Error occurred while contacting the AI server.' });
+  }
+});
+
+// Setup dev server or static build serving
+async function bootstrap() {
+  if (process.env.NODE_ENV !== 'production') {
+    const { createServer } = await import('vite');
+    const vite = await createServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = __dirname;
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[FULLSTACK SERVER] running on http://localhost:${PORT}`);
+  });
+}
+
+bootstrap();

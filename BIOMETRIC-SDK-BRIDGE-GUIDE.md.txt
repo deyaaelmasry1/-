@@ -1,0 +1,35 @@
+# دليل موصلات أجهزة البصمة
+
+يدعم النظام ثلاث طرق: CSV، اتصال مباشر، وSDK Bridge.
+
+## مكان موصل SDK
+
+يوضع الملف باسم `bridge.cjs` داخل مجلد بيانات التطبيق:
+
+`biometric-sdk/<vendor>/bridge.cjs`
+
+مثال Anviz:
+
+`biometric-sdk/anviz/bridge.cjs`
+
+## الواجهة المطلوبة
+
+```js
+module.exports = {
+  async testConnection(device) {
+    return { ok: true, model: 'Device model' };
+  },
+  async fetchAttendance(device) {
+    return [
+      {
+        employeeId: '15',
+        employeeName: 'اسم الموظف',
+        eventType: 'CHECK_IN',
+        eventTime: '2026-07-19T08:00:00.000Z'
+      }
+    ];
+  }
+};
+```
+
+يمكن للموصل تحميل DLL أو تنفيذ برنامج الشركة أو استدعاء API محلي، لكن يجب أن يعيد السجلات بالشكل الموحد أعلاه.

@@ -1,0 +1,29 @@
+# تقرير إعادة الهيكلة — Stage 8
+
+تمت متابعة العمل من نسخة Stage 7.
+
+## ما تم فصله
+
+- شاشة التقارير التفصيلية إلى `src/components/erp/screens/ReportsScreen.tsx`.
+- شاشة فريق العمل إلى `src/components/erp/screens/TeamScreen.tsx`.
+- شاشة السندات والتحصيلات إلى `src/components/erp/screens/VouchersScreen.tsx`.
+- منطق نماذج إضافة العملاء والموردين والبحث داخل القوائم إلى `src/components/erp/hooks/usePartyDirectoryController.ts`.
+
+## تحسين التحميل
+
+تم تحميل شاشات التقارير وفريق العمل والسندات باستخدام `React.lazy` و`Suspense`، وأصبحت كل شاشة ملف JavaScript مستقلًا في بناء Vite.
+
+## النتيجة
+
+انخفض حجم `ErpWorkspaceRuntime.tsx` من 4,843 سطرًا في Stage 7 إلى 3,733 سطرًا في Stage 8.
+
+## التحقق
+
+- TypeScript: ناجح.
+- الاختبارات: 12/12 ناجحة.
+- بناء Vite: ناجح.
+- بناء الخادم: ناجح.
+
+## ما يزال داخل Runtime
+
+ما يزال Runtime يحتوي على تنسيق الحالة العامة، ملفات العرض التفصيلية للعملاء والموردين، نافذة الفاتورة والسند المطبوع، وبعض معالجات فريق العمل والفواتير. لذلك أصبح أخف، لكنه لم يتحول بعد إلى Router خالص.

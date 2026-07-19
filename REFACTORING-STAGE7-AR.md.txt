@@ -1,0 +1,28 @@
+# تقرير إعادة الهيكلة — Stage 7
+
+تمت متابعة العمل من نسخة Stage 6.
+
+## ما تم فصله
+
+- نقل JSX الفعلي للنوافذ التفصيلية السبع إلى `src/components/erp/modals/EntityDetailModalHost.tsx`:
+  - تفاصيل الخدمة.
+  - تفاصيل الحركة.
+  - تفاصيل المصروف.
+  - تفاصيل التحويل.
+  - تفاصيل الشريك.
+  - تفاصيل توزيع الأرباح.
+  - تفاصيل المخزن.
+- نقل واجهة مركز الطباعة والمعاينة كاملة إلى `src/components/erp/printing/PrintPreviewCenter.tsx`.
+- نقل شاشة العملاء والموردين إلى `src/components/erp/screens/CustomersSuppliersScreen.tsx`.
+- نقل شاشة الشركاء وتوزيعات الأرباح إلى `src/components/erp/screens/PartnersScreen.tsx`.
+
+## النتيجة
+
+انخفض `ErpWorkspaceRuntime.tsx` من 7,811 إلى 4,843 سطرًا. أصبح Runtime أخف ويعمل كمنسق للشاشات والـ controllers والـ modal host، لكنه لم يصبح Router خالصًا بعد؛ ما تزال واجهات فريق العمل والسندات والتقارير وبعض منطق نماذج الملفات موجودة داخله.
+
+## التحقق
+
+- TypeScript: ناجح.
+- الاختبارات: 12/12 ناجحة.
+- بناء Vite: ناجح.
+- بناء الخادم: ناجح.

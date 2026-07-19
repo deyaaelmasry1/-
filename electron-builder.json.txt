@@ -1,0 +1,39 @@
+{
+  "appId": "com.diyaelmasri.erphub",
+  "productName": "ERP Hub POS",
+  "copyright": "Copyright © 2026 ضياء المصري (Diaa Al-Masri)",
+  "compression": "normal",
+  "directories": {
+    "output": "dist-desktop"
+  },
+  "files": [
+    "dist/**/*",
+    "electron-main.cjs",
+    "package.json",
+    "preload.cjs",
+    "database.cjs",
+    "biometric-device-service.cjs",
+    "BIOMETRIC-SDK-BRIDGE-GUIDE.md"
+  ],
+  "win": {
+    "icon": "build/icon.ico",
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      }
+    ]
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowElevation": true,
+    "perMachine": true,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "ERP Hub POS"
+  }
+}

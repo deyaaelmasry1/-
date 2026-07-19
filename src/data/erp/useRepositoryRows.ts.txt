@@ -1,0 +1,14 @@
+import { useEffect, useMemo } from 'react';
+import { useEntityPage } from './useEntityPage';
+import type { RepositoryPageSource } from '../../components/erp/repositories/BaseRepository';
+
+export function useRepositoryRows<T extends Record<string, any>>(repository: RepositoryPageSource<Record<string, unknown>>, pageSize = 50) {
+  const page = useEntityPage<Record<string, unknown>>(repository, pageSize);
+  useEffect(() => {
+    const refresh = () => void page.reload();
+    window.addEventListener('erp:database-updated', refresh);
+    return () => window.removeEventListener('erp:database-updated', refresh);
+  }, [page.reload]);
+  const rows = useMemo(() => page.rows.map((row: any) => row?.payload ?? row) as T[], [page.rows]);
+  return { ...page, rows };
+}

@@ -1,0 +1,83 @@
+import { memo, type ReactNode } from 'react';
+import { Coins, PiggyBank, Shuffle, TrendingDown } from 'lucide-react';
+
+interface TreasurySummaryBannerProps {
+  language: 'ar' | 'en';
+  safeBalance: number;
+  netProfit: number;
+  expensesTotal: number;
+  warehousesCount: number;
+}
+
+function TreasurySummaryBannerComponent({
+  language,
+  safeBalance,
+  netProfit,
+  expensesTotal,
+  warehousesCount,
+}: TreasurySummaryBannerProps) {
+  return (
+    <div className="bg-radial from-slate-900 via-slate-950 to-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl relative overflow-hidden">
+      <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-0 left-0 w-64 h-64 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 relative z-10">
+        <Metric
+          label={language === 'ar' ? 'رصيد الخزنة والصندوق الكلي' : 'Dynamic Cash Safe balance'}
+          value={`$${safeBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+          note={language === 'ar' ? '● نشط وآمن' : '● Active & Online'}
+          icon={<PiggyBank className="w-6 h-6 animate-pulse" />}
+          classes="bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+          valueClass="text-2xl text-slate-100"
+        />
+        <Metric
+          label={language === 'ar' ? 'إجمالي أرباح النشاط الكلي' : 'Gross Business Net Profit'}
+          value={`$${netProfit.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+          note={language === 'ar' ? 'بعد خصم المصاريف والمشتروات' : 'After utility & expense deducts'}
+          icon={<Coins className="w-6 h-6" />}
+          classes="bg-indigo-500/10 text-indigo-400 border-indigo-500/20"
+          valueClass="text-xl text-indigo-300"
+        />
+        <Metric
+          label={language === 'ar' ? 'إجمالي قيمة المصروفات' : 'Operating Overhead Expenses'}
+          value={`$${expensesTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+          note={language === 'ar' ? 'الرواتب، الإيجارات، الفواتير' : 'Salaries, lease and utilities'}
+          icon={<TrendingDown className="w-6 h-6" />}
+          classes="bg-rose-500/10 text-rose-400 border-rose-500/20"
+          valueClass="text-xl text-rose-300"
+        />
+        <Metric
+          label={language === 'ar' ? 'الفروع والمستودعات' : 'Warehouses & Outlets'}
+          value={`${warehousesCount} ${language === 'ar' ? 'مواقع جرد' : 'Locations'}`}
+          note={language === 'ar' ? 'تحويل بيني سريع متاح' : 'Inter-transfers fully active'}
+          icon={<Shuffle className="w-6 h-6" />}
+          classes="bg-amber-500/10 text-amber-400 border-amber-500/20"
+          valueClass="text-lg text-amber-300"
+        />
+      </div>
+    </div>
+  );
+}
+
+function Metric({ label, value, note, icon, classes, valueClass }: {
+  label: string;
+  value: string;
+  note: string;
+  icon: ReactNode;
+  classes: string;
+  valueClass: string;
+}) {
+  return (
+    <div className="space-y-2">
+      <span className="text-[10px] text-slate-400 font-bold tracking-widest uppercase block">{label}</span>
+      <div className="flex items-center gap-3">
+        <div className={`p-3 rounded-2xl border ${classes}`}>{icon}</div>
+        <div>
+          <span className={`${valueClass} font-black font-mono tracking-tight`}>{value}</span>
+          <span className="text-[9px] text-slate-500 block mt-0.5">{note}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export const TreasurySummaryBanner = memo(TreasurySummaryBannerComponent);

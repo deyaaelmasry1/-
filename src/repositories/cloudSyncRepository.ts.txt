@@ -1,0 +1,16 @@
+import { desktopDatabase } from '../utils/desktopDatabase';
+
+/**
+ * Compatibility bridge: Firebase keeps its current payload contract while SQLite
+ * remains the durable local source. Cloud changes are committed by the central
+ * persistence hook immediately after React state reconciliation.
+ */
+export const cloudSyncRepository = {
+  async exportLocalSnapshot() {
+    return desktopDatabase.available() ? desktopDatabase.exportSnapshot() : null;
+  },
+  async importLocalSnapshot(snapshot: unknown) {
+    if (!desktopDatabase.available()) return null;
+    return desktopDatabase.importSnapshot(snapshot);
+  }
+};

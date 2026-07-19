@@ -1,0 +1,17 @@
+import { erpEventBus } from './erpEventBus';
+let registered = false;
+export function registerDefaultEventFlow() {
+  if (registered) return; registered = true;
+  erpEventBus.on('invoice:saved', ({ invoiceId }) => {
+    erpEventBus.emit('inventory:updated', {});
+    erpEventBus.emit('treasury:updated', { reason: `invoice:${invoiceId}` });
+    erpEventBus.emit('dashboard:invalidate', { reason: 'invoice:saved' });
+    erpEventBus.emit('cloud:enqueue', { entity: 'invoice', entityId: invoiceId, operation: 'UPSERT' });
+  });
+  erpEventBus.on('invoice:deleted', ({ invoiceId }) => {
+    erpEventBus.emit('inventory:updated', {});
+    erpEventBus.emit('treasury:updated', { reason: `invoice-deleted:${invoiceId}` });
+    erpEventBus.emit('dashboard:invalidate', { reason: 'invoice:deleted' });
+    erpEventBus.emit('cloud:enqueue', { entity: 'invoice', entityId: invoiceId, operation: 'DELETE' });
+  });
+}

@@ -1,0 +1,2 @@
+import { useEffect } from 'react'; import { erpEventBus } from './erpEventBus';
+export function useDatabaseInvalidation(refresh:()=>void|Promise<void>) { useEffect(()=>erpEventBus.on('database:changed',()=>void refresh()),[refresh]); }

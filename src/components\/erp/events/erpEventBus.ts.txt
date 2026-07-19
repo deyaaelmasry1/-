@@ -1,0 +1,23 @@
+export type ErpEventMap = {
+  'invoice:saved': { invoiceId: string };
+  'invoice:deleted': { invoiceId: string };
+  'inventory:updated': { productIds?: string[] };
+  'treasury:updated': { reason: string };
+  'dashboard:invalidate': { reason: string };
+  'cloud:enqueue': { entity: string; entityId: string; operation: 'UPSERT' | 'DELETE' };
+  'database:changed': { tables?: string[] };
+};
+
+type Handler<T> = (payload: T) => void | Promise<void>;
+class TypedEventBus {
+  private handlers = new Map<keyof ErpEventMap, Set<Handler<any>>>();
+  on<K extends keyof ErpEventMap>(event: K, handler: Handler<ErpEventMap[K]>) {
+    const set = this.handlers.get(event) ?? new Set(); set.add(handler); this.handlers.set(event, set);
+    return () => set.delete(handler);
+  }
+  emit<K extends keyof ErpEventMap>(event: K, payload: ErpEventMap[K]) {
+    for (const handler of this.handlers.get(event) ?? []) queueMicrotask(() => void handler(payload));
+  }
+  clear() { this.handlers.clear(); }
+}
+export const erpEventBus = new TypedEventBus();

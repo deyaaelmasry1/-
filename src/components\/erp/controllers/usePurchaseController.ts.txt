@@ -1,0 +1,16 @@
+import { useCallback } from 'react';
+export function usePurchaseController(d: any) {
+  const handlePurchaseCheckout = useCallback((e: any) => {
+    e.preventDefault();
+    const product = d.products.find((p: any) => p.id === d.purchaseProductId);
+    const supplier = d.suppliers.find((s: any) => s.id === d.purchaseSupplierId);
+    if (!product || !supplier || d.purchaseQty <= 0 || d.purchaseCostPrice < 0) return d.showToast(d.language === 'ar' ? 'أكمل بيانات عملية الشراء' : 'Complete purchase details', 'error');
+    const total = d.purchaseQty * d.purchaseCostPrice;
+    const tx = { id: `tx_purchase_${Date.now()}`, productId: product.id, type: 'IN', quantity: d.purchaseQty, unitPrice: d.purchaseCostPrice, date: new Date().toISOString(), notes: `${d.language === 'ar' ? 'شراء من المورد' : 'Purchase from supplier'} ${supplier.name}`, supplierId: supplier.id, warehouseId: d.purchaseWarehouseId, cashierId: d.currentUser.id, paymentMethod: d.purchasePaymentMethod };
+    d.setProducts((prev: any[]) => prev.map(p => p.id === product.id ? { ...p, quantity: p.quantity + d.purchaseQty, costPrice: d.purchaseCostPrice } : p));
+    if (d.purchasePaymentMethod === 'DEBT') d.setSuppliers((prev: any[]) => prev.map(s => s.id === supplier.id ? { ...s, balance: (s.balance || 0) + total } : s));
+    d.setTransactions((prev: any[]) => [tx, ...prev]);
+    d.setPurchaseQty(1); d.setPurchaseCostPrice(product.costPrice || 0); d.showToast(d.language === 'ar' ? 'تم تسجيل عملية الشراء' : 'Purchase registered', 'success');
+  }, [d]);
+  return { handlePurchaseCheckout };
+}

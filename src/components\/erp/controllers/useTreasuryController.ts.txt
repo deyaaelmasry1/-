@@ -1,0 +1,10 @@
+import { useCallback } from 'react';
+export function useTreasuryController(d: any) {
+  const handleManualSafeTransaction = useCallback((e: any) => {
+    e.preventDefault();
+    if (!d.safeTxAmount || d.safeTxAmount <= 0) return d.showToast(d.language === 'ar' ? 'أدخل مبلغًا صحيحًا' : 'Enter a valid amount', 'error');
+    const tx = { id: `safe_${Date.now()}`, type: d.safeTxType === 'DEPOSIT' ? 'SAFE_DEPOSIT' : 'SAFE_WITHDRAWAL', quantity: 1, unitPrice: d.safeTxAmount, date: new Date().toISOString(), notes: d.safeTxNotes || (d.safeTxType === 'DEPOSIT' ? 'Manual safe deposit' : 'Manual safe withdrawal'), cashierId: d.currentUser.id, paymentMethod: 'CASH' };
+    d.setTransactions((prev: any[]) => [tx, ...prev]); d.setSafeTxAmount(100); d.setSafeTxNotes(''); d.showToast(d.language === 'ar' ? 'تم تسجيل حركة الخزينة' : 'Treasury transaction saved', 'success');
+  }, [d]);
+  return { handleManualSafeTransaction };
+}

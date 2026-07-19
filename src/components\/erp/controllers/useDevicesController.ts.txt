@@ -1,0 +1,20 @@
+import { useCallback } from 'react';
+export function useDevicesController(d: any) {
+  const guard = useCallback((fn: (...args: any[]) => any, label: string) => async (...args: any[]) => {
+    try { return await fn(...args); } catch (error) { console.error(label, error); d.showToast(d.language === 'ar' ? `تعذر تنفيذ ${label}` : `Failed to ${label}`, 'error'); }
+  }, [d]);
+  return {
+    handleScanAndConnectBluetooth: guard(d.deviceActions.handleScanAndConnectBluetooth, 'Bluetooth connection'),
+    handleDisconnectBluetooth: guard(d.deviceActions.handleDisconnectBluetooth, 'Bluetooth disconnection'),
+    handlePrintTestToBluetooth: guard(d.deviceActions.handlePrintTestToBluetooth, 'Bluetooth print test'),
+    handlePrintTestToWifi: guard(d.deviceActions.handlePrintTestToWifi, 'Wi-Fi print test'),
+    handleReadScaleWeight: guard(d.deviceActions.handleReadScaleWeight, 'scale reading'),
+    handleExportMobileData: guard(d.deviceActions.handleExportMobileData, 'mobile export'),
+    handleImportMobileData: guard(d.deviceActions.handleImportMobileData, 'mobile import'),
+    handleMobileFileChange: guard(d.deviceActions.handleMobileFileChange, 'mobile file import'),
+    fetchWindowsPrinters: guard(d.deviceActions.fetchWindowsPrinters, 'printer discovery'),
+    fetchWindowsSerialPorts: guard(d.deviceActions.fetchWindowsSerialPorts, 'serial port discovery'),
+    handleKickDrawerOnWindows: guard(d.deviceActions.handleKickDrawerOnWindows, 'cash drawer'),
+    handlePrintToWindowsSpooler: guard(d.deviceActions.handlePrintToWindowsSpooler, 'Windows printing')
+  };
+}

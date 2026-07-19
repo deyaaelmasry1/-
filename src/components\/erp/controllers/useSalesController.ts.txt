@@ -1,0 +1,121 @@
+import { useCallback } from 'react';
+import { erpEventBus } from '../events/erpEventBus';
+
+export function useSalesController(d: any) {
+  const addToCart = useCallback((productId: string, qty: number, customPrice?: number) => {
+    const prod = d.products.find((p: any) => p.id === productId);
+    if (!prod) return;
+    if (prod.quantity < qty) return d.showToast(d.t.insufficientStock, 'error');
+    const price = customPrice ?? prod.sellingPrice;
+    d.setCart((prev: any[]) => {
+      const existing = prev.find(i => i.type === 'product' && i.product?.id === prod.id);
+      if (existing) {
+        if (prod.quantity < existing.quantity + qty) {
+          d.showToast(d.t.insufficientStock, 'error');
+          return prev;
+        }
+        return prev.map(i => i.id === existing.id ? { ...i, quantity: i.quantity + qty } : i);
+      }
+      return [...prev, { id: `prod-${prod.id}`, name: prod.name, type: 'product', product: prod, quantity: qty, unitPrice: price }];
+    });
+    d.showToast(d.language === 'ar' ? 'تمت إضافة المنتج للسلة' : 'Added to cart successfully');
+  }, [d]);
+
+  const addServiceToCart = useCallback((serviceId: string, qty: number, customPrice?: number) => {
+    const srv = d.services.find((s: any) => s.id === serviceId);
+    if (!srv) return;
+    const price = customPrice ?? srv.price;
+    d.setCart((prev: any[]) => {
+      const existing = prev.find(i => i.type === 'service' && i.service?.id === srv.id);
+      return existing
+        ? prev.map(i => i.id === existing.id ? { ...i, quantity: i.quantity + qty } : i)
+        : [...prev, { id: `srv-${srv.id}`, name: srv.name, type: 'service', service: srv, quantity: qty, unitPrice: price }];
+    });
+    d.showToast(d.language === 'ar' ? 'تمت إضافة الخدمة للسلة' : 'Added to cart successfully');
+  }, [d]);
+
+  const removeFromCart = useCallback((itemId: string) => d.setCart((prev: any[]) => prev.filter(i => i.id !== itemId)), [d]);
+
+  const updateCartQty = useCallback((itemId: string, newQty: number) => {
+    if (newQty <= 0) return removeFromCart(itemId);
+    d.setCart((prev: any[]) => prev.map(item => {
+      if (item.id !== itemId) return item;
+      if (item.type === 'product' && item.product) {
+        const prod = d.products.find((p: any) => p.id === item.product.id);
+        if (prod && prod.quantity < newQty) {
+          d.showToast(d.language === 'ar' ? `الكمية المطلوبة تتجاوز المخزون المتوفر (${prod.quantity})` : `Requested quantity exceeds available stock (${prod.quantity})`, 'error');
+          return item;
+        }
+      }
+      return { ...item, quantity: newQty };
+    }));
+  }, [d, removeFromCart]);
+
+  const checkout = useCallback((e: any) => {
+    e.preventDefault();
+    if (!d.cart.length) return d.showToast(d.language === 'ar' ? 'السلة فارغة!' : 'Your cart is empty!', 'error');
+    const subtotal = d.cart.reduce((sum: number, item: any) => sum + item.quantity * item.unitPrice, 0);
+    const total = Math.max(0, subtotal - d.posDiscount);
+    const invoiceNo = `INV-${Date.now().toString().slice(-6)}`;
+    const dateStr = new Date().toISOString();
+    const customer = d.customers.find((c: any) => c.id === d.selectedCustomerId);
+    const customerName = customer?.name || (d.language === 'ar' ? 'زبون نقدي سريع' : 'Walk-in Retail Cash');
+    const customerPhone = customer?.phone || '';
+    const timestamp = Date.now();
+    const txs = d.cart.map((item: any, index: number) => ({
+      id: `tx_sale_${timestamp}_${index + 1}`,
+      productId: item.product?.id,
+      serviceId: item.service?.id,
+      type: 'OUT', quantity: item.quantity, unitPrice: item.unitPrice, date: dateStr,
+      notes: `${d.language === 'ar' ? (item.type === 'service' ? 'رسوم خدمات مهنية' : 'مبيعات فاتورة POS') : (item.type === 'service' ? 'Professional Service Charge' : 'POS Checkout Sale')} #${invoiceNo}`,
+      customerId: d.selectedCustomerId || undefined,
+      warehouseId: item.product?.warehouseId || undefined,
+      cashierId: d.currentUser.id,
+      paymentMethod: d.posPaymentMethod
+    }));
+    d.setProducts((prev: any[]) => prev.map(p => {
+      const item = d.cart.find((i: any) => i.type === 'product' && i.product?.id === p.id);
+      return item ? { ...p, quantity: Math.max(0, p.quantity - item.quantity) } : p;
+    }));
+    if ((d.posPaymentMethod === 'DEBT' || d.posPaymentMethod === 'INSTALLMENT') && d.selectedCustomerId) {
+      d.setCustomers((prev: any[]) => prev.map(c => c.id === d.selectedCustomerId ? { ...c, balance: c.balance + total } : c));
+    }
+    d.setTransactions((prev: any[]) => [...txs, ...prev]);
+    const invoice = { id: invoiceNo, invoiceNo, customerName, customerPhone, customerId: d.selectedCustomerId || undefined, date: dateStr, paymentMethod: d.posPaymentMethod, discount: d.posDiscount, items: d.cart.map((i: any) => ({ id: i.id, name: i.name, type: i.type, productId: i.product?.id, serviceId: i.service?.id, quantity: i.quantity, unitPrice: i.unitPrice })), subtotal, total, cashierId: d.currentUser.id };
+    d.setInvoices((prev: any[]) => [invoice, ...prev]);
+    d.setActiveInvoice({ items: d.cart, customerName, customerPhone, invoiceNo, date: dateStr, paymentMethod: d.posPaymentMethod, subtotal, discount: d.posDiscount, total });
+    erpEventBus.emit('invoice:saved', { invoiceId: invoice.id });
+    erpEventBus.emit('database:changed', { tables: ['invoices','invoice_items','products','stock_movements'] });
+    d.setCart([]); d.setSelectedCustomerId(''); d.setPosDiscount(0); d.playBeep('success');
+  }, [d]);
+
+  const deleteInvoice = useCallback((id: string) => {
+    if (!window.confirm(d.language === 'ar' ? `هل أنت متأكد من حذف الفاتورة رقم ${id} بالكامل؟` : `Are you sure you want to delete invoice ${id}?`)) return;
+    const inv = d.invoices.find((i: any) => i.id === id);
+    if (!inv) return;
+    d.setProducts((prev: any[]) => prev.map(p => {
+      const item = inv.items.find((it: any) => it.type === 'product' && it.productId === p.id);
+      return item ? { ...p, quantity: p.quantity + item.quantity } : p;
+    }));
+    if ((inv.paymentMethod === 'DEBT' || inv.paymentMethod === 'INSTALLMENT') && inv.customerId) d.setCustomers((prev: any[]) => prev.map(c => c.id === inv.customerId ? { ...c, balance: Math.max(0, c.balance - inv.total) } : c));
+    d.setTransactions((prev: any[]) => prev.filter(tx => !String(tx.notes || '').includes(`#${inv.invoiceNo || inv.id}`)));
+    d.setInvoices((prev: any[]) => prev.filter(i => i.id !== id));
+    erpEventBus.emit('invoice:deleted', { invoiceId: id });
+    erpEventBus.emit('database:changed', { tables: ['invoices','invoice_items','products','stock_movements'] });
+    d.showToast(d.language === 'ar' ? 'تم حذف الفاتورة وعكس تأثيرها' : 'Invoice deleted and reversed', 'success');
+  }, [d]);
+
+  const quickAddCustomer = useCallback((e: any) => {
+    e.preventDefault(); if (!d.newCustomerName.trim()) return;
+    const customer = { id: `cust_${Date.now()}`, name: d.newCustomerName.trim(), phone: d.newCustomerPhone.trim(), balance: 0 };
+    d.setCustomers((prev: any[]) => [customer, ...prev]); d.setSelectedCustomerId(customer.id); d.setNewCustomerName(''); d.setNewCustomerPhone('');
+  }, [d]);
+
+  const quickAddProduct = useCallback((e: any) => {
+    e.preventDefault(); if (!d.newProductName.trim() || !d.newProductCode.trim()) return;
+    const product = { id: `prod_${Date.now()}`, name: d.newProductName.trim(), code: d.newProductCode.trim(), categoryId: d.newProductCategory || d.categories[0]?.id || '', sellingPrice: Number(d.newProductSellingPrice) || 0, costPrice: Number(d.newProductCostPrice) || 0, quantity: Number(d.newProductQty) || 0, warehouseId: d.newProductWarehouse || d.warehouses[0]?.id || 'wh_1' };
+    d.setProducts((prev: any[]) => [product, ...prev]); d.setNewProductName(''); d.setNewProductCode(''); d.setNewProductSellingPrice(0); d.setNewProductCostPrice(0); d.setNewProductQty(0);
+  }, [d]);
+
+  return { handleAddToCart: addToCart, handleAddServiceToCart: addServiceToCart, handleUpdateCartQty: updateCartQty, handleRemoveFromCart: removeFromCart, handleCheckoutPOS: checkout, handleDeleteInvoice: deleteInvoice, handleQuickAddCustomer: quickAddCustomer, handleQuickAddProduct: quickAddProduct };
+}

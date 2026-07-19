@@ -1,0 +1,13 @@
+import { useState } from 'react';
+export function usePurchaseFormState() {
+  const [purchasesSearchQuery, setPurchasesSearchQuery] = useState('');
+  const [selectedPurchaseCategory, setSelectedPurchaseCategory] = useState('ALL');
+  const [purchaseProductId, setPurchaseProductId] = useState('');
+  const [purchaseSupplierId, setPurchaseSupplierId] = useState('');
+  const [purchaseQty, setPurchaseQty] = useState(1);
+  const [purchaseCostPrice, setPurchaseCostPrice] = useState(0);
+  const [purchaseWarehouseId, setPurchaseWarehouseId] = useState('wh_1');
+  const [purchasePaymentMethod, setPurchasePaymentMethod] = useState<'CASH' | 'DEBT'>('CASH');
+  const [isPurchaseProductDropdownOpen, setIsPurchaseProductDropdownOpen] = useState(false);
+  return { purchasesSearchQuery,setPurchasesSearchQuery,selectedPurchaseCategory,setSelectedPurchaseCategory,purchaseProductId,setPurchaseProductId,purchaseSupplierId,setPurchaseSupplierId,purchaseQty,setPurchaseQty,purchaseCostPrice,setPurchaseCostPrice,purchaseWarehouseId,setPurchaseWarehouseId,purchasePaymentMethod,setPurchasePaymentMethod,isPurchaseProductDropdownOpen,setIsPurchaseProductDropdownOpen };
+}

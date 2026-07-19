@@ -1,0 +1,8 @@
+import { useState } from 'react';
+export function useTreasuryFormState() {
+  const [safeTxType, setSafeTxType] = useState<'DEPOSIT' | 'WITHDRAWAL'>('DEPOSIT');
+  const [safeTxAmount, setSafeTxAmount] = useState(100);
+  const [safeTxNotes, setSafeTxNotes] = useState('');
+  const [selectedSafeOp, setSelectedSafeOp] = useState<any>(null);
+  return { safeTxType,setSafeTxType,safeTxAmount,setSafeTxAmount,safeTxNotes,setSafeTxNotes,selectedSafeOp,setSelectedSafeOp };
+}

@@ -1,0 +1,24 @@
+import { useState } from 'react';
+export function useSalesFormState() {
+  const [cart, setCart] = useState<any[]>([]);
+  const [posMode, setPosMode] = useState<'products' | 'services'>('products');
+  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [posDiscount, setPosDiscount] = useState(0);
+  const [salesSubMode, setSalesSubMode] = useState<'register' | 'archive'>('register');
+  const [invoiceSearchQuery, setInvoiceSearchQuery] = useState('');
+  const [invoiceMethodFilter, setInvoiceMethodFilter] = useState<'ALL' | 'CASH' | 'CARD' | 'DEBT'>('ALL');
+  const [salesSearchQuery, setSalesSearchQuery] = useState('');
+  const [selectedPosCategory, setSelectedPosCategory] = useState('ALL');
+  const [currentPosPage, setCurrentPosPage] = useState(1);
+  const [posPaymentMethod, setPosPaymentMethod] = useState<'CASH' | 'CARD' | 'DEBT' | 'INSTALLMENT'>('CASH');
+  const [newCustomerName, setNewCustomerName] = useState('');
+  const [newCustomerPhone, setNewCustomerPhone] = useState('');
+  const [newProductName, setNewProductName] = useState('');
+  const [newProductCode, setNewProductCode] = useState('');
+  const [newProductCategory, setNewProductCategory] = useState('');
+  const [newProductSellingPrice, setNewProductSellingPrice] = useState(0);
+  const [newProductCostPrice, setNewProductCostPrice] = useState(0);
+  const [newProductQty, setNewProductQty] = useState(0);
+  const [newProductWarehouse, setNewProductWarehouse] = useState('');
+  return { cart,setCart,posMode,setPosMode,selectedCustomerId,setSelectedCustomerId,posDiscount,setPosDiscount,salesSubMode,setSalesSubMode,invoiceSearchQuery,setInvoiceSearchQuery,invoiceMethodFilter,setInvoiceMethodFilter,salesSearchQuery,setSalesSearchQuery,selectedPosCategory,setSelectedPosCategory,currentPosPage,setCurrentPosPage,posPaymentMethod,setPosPaymentMethod,newCustomerName,setNewCustomerName,newCustomerPhone,setNewCustomerPhone,newProductName,setNewProductName,newProductCode,setNewProductCode,newProductCategory,setNewProductCategory,newProductSellingPrice,setNewProductSellingPrice,newProductCostPrice,setNewProductCostPrice,newProductQty,setNewProductQty,newProductWarehouse,setNewProductWarehouse };
+}

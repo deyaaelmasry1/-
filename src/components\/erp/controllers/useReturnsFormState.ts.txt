@@ -1,0 +1,11 @@
+import { useState } from 'react';
+export function useReturnsFormState() {
+  const [returnType, setReturnType] = useState<'SALE_RETURN' | 'PURCHASE_RETURN'>('SALE_RETURN');
+  const [returnProductId, setReturnProductId] = useState('');
+  const [returnQty, setReturnQty] = useState(1);
+  const [returnNotes, setReturnNotes] = useState('');
+  const [returnPaymentMode, setReturnPaymentMode] = useState<'CASH' | 'DEBT_SETTLEMENT'>('DEBT_SETTLEMENT');
+  const [returnCustomerId, setReturnCustomerId] = useState('');
+  const [returnSupplierId, setReturnSupplierId] = useState('');
+  return { returnType,setReturnType,returnProductId,setReturnProductId,returnQty,setReturnQty,returnNotes,setReturnNotes,returnPaymentMode,setReturnPaymentMode,returnCustomerId,setReturnCustomerId,returnSupplierId,setReturnSupplierId };
+}

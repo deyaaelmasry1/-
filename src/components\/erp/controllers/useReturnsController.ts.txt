@@ -1,0 +1,14 @@
+import { useCallback } from 'react';
+export function useReturnsController(d: any) {
+  const handleRegisterReturn = useCallback((e: any) => {
+    e.preventDefault();
+    const product = d.products.find((p: any) => p.id === d.returnProductId);
+    if (!product || d.returnQty <= 0) return d.showToast(d.language === 'ar' ? 'اختر المنتج والكمية' : 'Select product and quantity', 'error');
+    if (d.returnType === 'PURCHASE_RETURN' && product.quantity < d.returnQty) return d.showToast(d.t.insufficientStock, 'error');
+    const unitPrice = d.returnType === 'SALE_RETURN' ? product.sellingPrice : product.costPrice;
+    const tx = { id: `return_${Date.now()}`, productId: product.id, type: d.returnType, quantity: d.returnQty, unitPrice, date: new Date().toISOString(), notes: d.returnNotes, cashierId: d.currentUser.id };
+    d.setProducts((prev: any[]) => prev.map(p => p.id === product.id ? { ...p, quantity: d.returnType === 'SALE_RETURN' ? p.quantity + d.returnQty : p.quantity - d.returnQty } : p));
+    d.setTransactions((prev: any[]) => [tx, ...prev]); d.setReturnProductId(''); d.setReturnQty(1); d.setReturnNotes(''); d.showToast(d.language === 'ar' ? 'تم تسجيل المرتجع' : 'Return registered', 'success');
+  }, [d]);
+  return { handleRegisterReturn };
+}

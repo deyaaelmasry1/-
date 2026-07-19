@@ -1,0 +1,262 @@
+export const translations = {
+  ar: {
+    appTitle: 'مدير المخازن الخاص بي',
+    appSubTitle: 'نظام إدارة المخازن والمستودعات والمنتجات الذكي',
+    dashboard: 'لوحة التحكم',
+    inventory: 'المخزون',
+    transactions: 'حركات المخزن (وارد/صادر)',
+    suppliers: 'إدارة الموردين',
+    aiAdvisor: 'المستشار الذكي AI',
+    langToggle: 'English',
+    
+    // KPI Cards
+    totalProducts: 'إجمالي المنتجات',
+    totalStockQty: 'إجمالي الكميات بالمخزن',
+    totalValue: 'إجمالي قيمة المخزون (بالتكلفة)',
+    totalSellingValue: 'القيمة البيعية المتوقعة',
+    expectedProfit: 'الأرباح المتوقعة',
+    lowStockAlerts: 'تنبيهات نقص المخزون',
+    recentTransactions: 'آخر حركات المخزن',
+    
+    // Low Stock Alert Banner
+    lowStockWarning: 'تحذير! بعض المنتجات وصلت للحد الأدنى من المخزون وتحتاج إلى إعادة طلب فوري.',
+    
+    // Product Table & Form
+    sku: 'رمز المنتج / باركود',
+    productName: 'اسم المنتج',
+    category: 'الفئة',
+    quantity: 'الكمية',
+    minQuantity: 'حد التنبيه (الأدنى)',
+    costPrice: 'سعر التكلفة',
+    sellingPrice: 'سعر البيع',
+    location: 'مكان التخزين (الرف)',
+    supplier: 'المورد الرئيسي',
+    description: 'الوصف والتفاصيل',
+    actions: 'الإجراءات',
+    
+    // Buttons & Operations
+    addProduct: 'إضافة منتج جديد',
+    editProduct: 'تعديل منتج',
+    deleteProduct: 'حذف منتج',
+    save: 'حفظ',
+    cancel: 'إلغاء',
+    confirmDelete: 'هل أنت متأكد من الحذف؟',
+    searchPlaceholder: 'ابحث بالاسم أو الباركود أو الفئة...',
+    filterAll: 'كل الفئات',
+    filterLowStock: 'منتجات منخفضة المخزون فقط',
+    filterOutOfStock: 'منتجات نفدت فقط',
+    exportCsv: 'تصدير لملف CSV',
+    importCsv: 'استيراد من CSV',
+    printBarcode: 'طباعة باركود ملصق',
+    generateSku: 'توليد تلقائي',
+    
+    // Categories
+    manageCategories: 'إدارة الفئات',
+    addCategory: 'إضافة فئة جديدة',
+    categoryName: 'اسم الفئة',
+    
+    // Transactions
+    logMovement: 'تسجيل حركة مخزنية جديدة',
+    txType: 'نوع الحركة',
+    stockIn: 'وارد (شراء / إضافة للمخزن)',
+    stockOut: 'صادر (بيع / صرف من المخزن)',
+    txQty: 'الكمية المتحركة',
+    txPrice: 'سعر الوحدة للحركة',
+    txDate: 'التاريخ والوقت',
+    notes: 'ملاحظات / رقم الفاتورة',
+    addTx: 'تسجيل الحركة',
+    txHistory: 'سجل حركات الوارد والصادر بالمستودع',
+    productSelected: 'المنتج المحدد',
+    
+    // Suppliers & Clients
+    supplierName: 'اسم المورد / الشركة',
+    companyName: 'اسم الشركة',
+    phone: 'رقم الهاتف',
+    email: 'البريد الإلكتروني',
+    address: 'العنوان',
+    addSupplier: 'إضافة مورد جديد',
+    supplierDetails: 'تفاصيل جهات الاتصال والموردين',
+    
+    // AI Panel
+    aiWelcome: 'مرحباً بك في مستشار المخازن الذكي المدعوم بـ Gemini AI.',
+    aiPromptPlaceholder: 'اسأل عن حالة المخزن، قيمة البضائع، أو اطلب تحليلاً للمنتجات منخفضة الكمية...',
+    aiSend: 'إرسال',
+    aiAuditButton: 'إجراء فحص ذكي للمخزون 📊',
+    aiAuditPrompt: 'قم بتحليل مخزني الحالي بالكامل بالتفصيل. اذكر القيمة المالية الكلية، الأرباح المتوقعة، المنتجات التي على وشك النفاد مع ذكر اسم المورد لكل منها لطلبها، ومكانها بالرف لتسهيل الوصول إليها. أعطني توصيات باللغة العربية.',
+    aiWait: 'جاري فحص المستودع والتواصل مع الذكاء الاصطناعي...',
+    aiNoKey: 'الرجاء تكوين مفتاح API لـ Gemini في لوحة Secrets لتفعيل المستشار الذكي.',
+    
+    // General
+    noData: 'لا توجد بيانات متاحة حالياً.',
+    status: 'الحالة',
+    inStock: 'متوفر',
+    lowStock: 'منخفض المخزون',
+    outOfStock: 'نفد من المخزن',
+    printReceipt: 'طباعة كشف جرد',
+    quickActions: 'إجراءات سريعة',
+    backupNotice: 'يتم حفظ البيانات تلقائياً في المتصفح، يمكنك تصديرها كنسخة احتياطية في أي وقت.',
+    
+    // Mobile Specific
+    scanBarcode: 'مسح الباركود للكاميرا 📷',
+    backupDatabase: 'نسخ احتياطي للبيانات (JSON)',
+    restoreDatabase: 'استعادة البيانات',
+    backupSuccess: 'تم إنشاء النسخة الاحتياطية وتنزيلها بنجاح!',
+    restoreSuccess: 'تمت استعادة البيانات وتحديث المخزن بنجاح!',
+    invalidBackupFile: 'الملف المرفوع غير صالح، يرجى التأكد من اختيار ملف .json الصحيح للنسخة الاحتياطية.',
+    importExport: 'النسخ الاحتياطي والاستعادة',
+
+    // ERP Systems Translation Keys
+    sales: 'المبيعات ونقاط البيع',
+    purchases: 'المشتريات وتوريد البضائع',
+    customers: 'العملاء والديون',
+    treasury: 'الخزنة وحركة الصندوق',
+    transfers: 'التحويل بين المخازن',
+    team: 'فريق العمل والصلاحيات',
+    returns: 'مرتجع المبيعات والمشتريات',
+    expenses: 'المصروفات التشغيلية',
+    reports: 'التقارير التحليلية والربحية',
+    partners: 'نظام الشركاء وحصص الأرباح',
+    standardPrint: 'طباعة قياسية (A4)',
+    thermalPrint: 'طباعة حرارية (80mm)',
+    safeBalance: 'رصيد الخزنة الحالي',
+    totalExpenses: 'إجمالي المصروفات',
+    totalSales: 'إجمالي المبيعات والواردات الصندوقية',
+    totalPurchases: 'إجمالي المشتريات والتكاليف',
+    partnerShare: 'حصص الأرباح المقدرة للشركاء',
+    transferSuccess: 'تم تحويل البضاعة بين المستودعات بنجاح!',
+    insufficientStock: 'الكمية غير كافية لإتمام هذه العملية!',
+    posCheckout: 'إنشاء فاتورة مبيعات سريعة POS',
+    cashier: 'أمين الصندوق'
+  },
+  en: {
+    appTitle: 'My Store Manager',
+    appSubTitle: 'Intelligent Warehouse, Store & Inventory Management System',
+    dashboard: 'Dashboard',
+    inventory: 'Inventory',
+    transactions: 'Stock Movements (In/Out)',
+    suppliers: 'Manage Suppliers',
+    aiAdvisor: 'Smart AI Advisor',
+    langToggle: 'العربية',
+    
+    // KPI Cards
+    totalProducts: 'Total Products',
+    totalStockQty: 'Total Stock Quantity',
+    totalValue: 'Total Stock Value (Cost)',
+    totalSellingValue: 'Expected Sales Value',
+    expectedProfit: 'Expected Profit',
+    lowStockAlerts: 'Low Stock Alerts',
+    recentTransactions: 'Recent Transactions',
+    
+    // Low Stock Alert Banner
+    lowStockWarning: 'Warning! Some products have reached their reorder thresholds and require replenishment immediately.',
+    
+    // Product Table & Form
+    sku: 'SKU / Barcode',
+    productName: 'Product Name',
+    category: 'Category',
+    quantity: 'Quantity',
+    minQuantity: 'Min Level (Alert)',
+    costPrice: 'Cost Price',
+    sellingPrice: 'Selling Price',
+    location: 'Warehouse Shelf / Location',
+    supplier: 'Primary Supplier',
+    description: 'Description & Specs',
+    actions: 'Actions',
+    
+    // Buttons & Operations
+    addProduct: 'Add New Product',
+    editProduct: 'Edit Product',
+    deleteProduct: 'Delete Product',
+    save: 'Save',
+    cancel: 'Cancel',
+    confirmDelete: 'Are you sure you want to delete this product?',
+    searchPlaceholder: 'Search by name, SKU or category...',
+    filterAll: 'All Categories',
+    filterLowStock: 'Low Stock Only',
+    filterOutOfStock: 'Out of Stock Only',
+    exportCsv: 'Export CSV',
+    importCsv: 'Import CSV',
+    printBarcode: 'Print Barcode Label',
+    generateSku: 'Auto-Generate',
+    
+    // Categories
+    manageCategories: 'Manage Categories',
+    addCategory: 'Add New Category',
+    categoryName: 'Category Name',
+    
+    // Transactions
+    logMovement: 'Log New Stock Movement',
+    txType: 'Movement Type',
+    stockIn: 'Stock In (Purchase/Add)',
+    stockOut: 'Stock Out (Sale/Deduct)',
+    txQty: 'Movement Quantity',
+    txPrice: 'Transaction Price',
+    txDate: 'Date & Time',
+    notes: 'Notes / Invoice No.',
+    addTx: 'Record Transaction',
+    txHistory: 'Inward & Outward Inventory Ledger',
+    productSelected: 'Selected Product',
+    
+    // Suppliers & Clients
+    supplierName: 'Supplier Name',
+    companyName: 'Company Name',
+    phone: 'Phone Number',
+    email: 'Email Address',
+    address: 'Physical Address',
+    addSupplier: 'Add Supplier',
+    supplierDetails: 'Suppliers Contact Directory',
+    
+    // AI Panel
+    aiWelcome: 'Welcome to the Smart Warehouse Advisor powered by Gemini AI.',
+    aiPromptPlaceholder: 'Ask about stock health, total asset value, or request a low-stock analysis report...',
+    aiSend: 'Send',
+    aiAuditButton: 'Perform Intelligent Stock Audit 📊',
+    aiAuditPrompt: 'Perform a detailed audit of my current inventory. Give me the financial metrics, highlight products nearing reorder levels along with their designated suppliers and shelf locations to speed up order logistics, and write a summary in English.',
+    aiWait: 'Auditing warehouse records and querying the AI model...',
+    aiNoKey: 'Please configure the Gemini API key in the Secrets panel to activate the AI Advisor.',
+    
+    // General
+    noData: 'No data available.',
+    status: 'Status',
+    inStock: 'In Stock',
+    lowStock: 'Low Stock',
+    outOfStock: 'Out of Stock',
+    printReceipt: 'Print Inventory Sheet',
+    quickActions: 'Quick Actions',
+    backupNotice: 'Data is automatically auto-saved to your browser. You can export a backup file anytime.',
+
+    // Mobile Specific
+    scanBarcode: 'Scan Camera Barcode 📷',
+    backupDatabase: 'Backup Database (JSON)',
+    restoreDatabase: 'Restore Database',
+    backupSuccess: 'Database backup downloaded successfully!',
+    restoreSuccess: 'Database restored successfully!',
+    invalidBackupFile: 'Invalid backup file. Please make sure to select a valid .json backup file.',
+    importExport: 'Backup & Restore',
+
+    // ERP Systems Translation Keys
+    sales: 'Sales & POS',
+    purchases: 'Purchases & Restocking',
+    customers: 'Customers & Debts',
+    treasury: 'Treasury Safe & Cashflow',
+    transfers: 'Inter-Store Transfers',
+    team: 'Team & Permissions',
+    returns: 'Sales & Purchase Returns',
+    expenses: 'Operational Expenses',
+    reports: 'Financial Reports & Profits',
+    partners: 'Partners System & Dividends',
+    standardPrint: 'Standard Print (A4)',
+    thermalPrint: 'Thermal Print (80mm)',
+    safeBalance: 'Safe Box Balance',
+    totalExpenses: 'Total Expenses',
+    totalSales: 'Total Sales & Cash In',
+    totalPurchases: 'Total Purchases & Cost Out',
+    partnerShare: 'Estimated Partners Share',
+    transferSuccess: 'Inventory transfer completed successfully!',
+    insufficientStock: 'Insufficient stock quantity for this operation!',
+    posCheckout: 'POS Quick Checkout Invoice',
+    cashier: 'Cashier'
+  }
+};
+
+export type Language = 'ar' | 'en';

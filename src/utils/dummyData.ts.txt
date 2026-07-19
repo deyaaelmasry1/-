@@ -1,0 +1,29 @@
+import { Product, Category, Supplier, Transaction, Customer, Warehouse, WarehouseTransfer, Expense, TeamMember, Partner, ProfessionalService } from '../types';
+
+export const INITIAL_CATEGORIES: Category[] = [];
+
+export const INITIAL_SUPPLIERS: Supplier[] = [];
+
+export const INITIAL_CUSTOMERS: Customer[] = [];
+
+export const INITIAL_WAREHOUSES: Warehouse[] = [];
+
+export const INITIAL_PRODUCTS: Product[] = [];
+
+export const INITIAL_TRANSACTIONS: Transaction[] = [];
+
+export const INITIAL_TRANSFERS: WarehouseTransfer[] = [];
+
+export const INITIAL_EXPENSES: Expense[] = [];
+
+export const INITIAL_TEAM: TeamMember[] = [
+  { id: 'team_1', name: 'المدير العام / General Manager', role: 'admin', username: 'admin', active: true },
+  { id: 'team_2', name: 'أحمد الكاشير / Ahmad Cashier', role: 'cashier', username: 'cashier', active: true, password: '123' },
+  { id: 'team_3', name: 'خالد أمين المستودع / Khalid Storekeeper', role: 'storekeeper', username: 'storekeeper', active: true, password: '123' }
+];
+
+export const INITIAL_PARTNERS: Partner[] = [];
+
+export const INITIAL_SERVICES: ProfessionalService[] = [];
+
+

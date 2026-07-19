@@ -1,0 +1,106 @@
+/**
+ * Universal Print Helper for ERP Hub
+ * Solves "This application does not support print preview" by printing from the main window 
+ * with dynamic DOM swapping and media-print stylesheets.
+ */
+export function printHtml(html: string, layout: 'thermal' | 'a4' = 'a4', title?: string) {
+  if (typeof window !== 'undefined' && (window as any).showPrintPreview) {
+    (window as any).showPrintPreview(html, layout, title);
+    return;
+  }
+
+  // 1. Remove any existing print area
+  const existingArea = document.getElementById('erp-print-area');
+  if (existingArea) {
+    existingArea.remove();
+  }
+  const existingStyle = document.getElementById('erp-print-style');
+  if (existingStyle) {
+    existingStyle.remove();
+  }
+
+  // 2. Create the print style block to hide main app during print
+  const style = document.createElement('style');
+  style.id = 'erp-print-style';
+  style.innerHTML = `
+    @media print {
+      /* Hide everything except the print area */
+      body > *:not(#erp-print-area) {
+        display: none !important;
+      }
+      #root {
+        display: none !important;
+      }
+      /* Show and reset the print area */
+      #erp-print-area, #erp-print-area * {
+        display: block !important;
+      }
+      #erp-print-area {
+        position: absolute !important;
+        left: 0 !important;
+        top: 0 !important;
+        width: 100% !important;
+        height: auto !important;
+        background: white !important;
+        color: black !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        z-index: 9999999 !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+      }
+    }
+  `;
+  document.head.appendChild(style);
+
+  // 3. Create the print area container
+  const printArea = document.createElement('div');
+  printArea.id = 'erp-print-area';
+  
+  // Extract content inside <body> tags if present, otherwise use full HTML
+  let bodyContent = html;
+  const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  if (bodyMatch) {
+    bodyContent = bodyMatch[1];
+  }
+
+  // Keep any style tags from the head so they apply to the content
+  const styleMatches = html.match(/<style[^>]*>([\s\S]*?)<\/style>/gi);
+  let headStyles = '';
+  if (styleMatches) {
+    headStyles = styleMatches.join('\n');
+  }
+
+  printArea.innerHTML = `
+    ${headStyles}
+    <div className="erp-printed-content">
+      ${bodyContent}
+    </div>
+  `;
+  document.body.appendChild(printArea);
+
+  // 4. Trigger print on the main window
+  setTimeout(() => {
+    try {
+      window.focus();
+      window.print();
+    } catch (e) {
+      console.error('Printing failed:', e);
+    }
+  }, 100);
+
+  // 5. Clean up after printing is complete or cancelled
+  const cleanup = () => {
+    try {
+      const el = document.getElementById('erp-print-area');
+      if (el) el.remove();
+      const st = document.getElementById('erp-print-style');
+      if (st) st.remove();
+    } catch (err) {
+      console.error('Cleanup error:', err);
+    }
+    window.removeEventListener('afterprint', cleanup);
+  };
+
+  window.addEventListener('afterprint', cleanup);
+}

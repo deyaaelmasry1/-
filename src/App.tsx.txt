@@ -1,0 +1,3252 @@
+import React, { useState, useEffect } from 'react';
+import { useDesktopDataPersistence } from './data/useDesktopDataPersistence';
+import { 
+  Product, 
+  Category, 
+  Supplier, 
+  Transaction, 
+  ChatMessage, 
+  Customer, 
+  Warehouse, 
+  WarehouseTransfer, 
+  Expense, 
+  TeamMember, 
+  Partner,
+  PartnerDistribution,
+  ProfessionalService,
+  FinancialVoucher,
+  Invoice
+} from './types';
+import { translations, Language } from './utils/translations';
+import { 
+  INITIAL_PRODUCTS, 
+  INITIAL_CATEGORIES, 
+  INITIAL_SUPPLIERS, 
+  INITIAL_TRANSACTIONS,
+  INITIAL_CUSTOMERS,
+  INITIAL_WAREHOUSES,
+  INITIAL_TRANSFERS,
+  INITIAL_EXPENSES,
+  INITIAL_TEAM,
+  INITIAL_PARTNERS,
+  INITIAL_SERVICES
+} from './utils/dummyData';
+import Dashboard from './components/Dashboard';
+import Inventory from './components/Inventory';
+import Transactions from './components/Transactions';
+import Suppliers from './components/Suppliers';
+import Customers from './components/Customers';
+import AiAdvisor from './components/AiAdvisor';
+import BarcodeScanner from './components/BarcodeScanner';
+import ErpHub from './components/ErpHub';
+import Settings from './components/Settings';
+import LoginScreen from './components/LoginScreen';
+import Reports from './components/Reports';
+import PrintPreviewModal from './components/PrintPreviewModal';
+import { 
+  LicensingLock, 
+  SidebarActivationBadge, 
+  generateDeviceId, 
+  generateLicenseKey 
+} from './components/Licensing';
+import { 
+  LayoutDashboard, 
+  Package, 
+  ArrowLeftRight, 
+  Users, 
+  BrainCircuit, 
+  Languages, 
+  Clock, 
+  Database,
+  Store,
+  Menu,
+  X,
+  Camera,
+  Download,
+  Upload,
+  CheckCircle,
+  AlertCircle,
+  Smartphone,
+  Briefcase,
+  ShoppingCart,
+  ShoppingBag,
+  Coins,
+  Undo2,
+  TrendingDown,
+  Shuffle,
+  Scale,
+  Printer,
+  Trash2,
+  Settings as SettingsIcon,
+  Wrench,
+  RefreshCw,
+  FileBarChart,
+  Cloud,
+  Bell,
+  Receipt,
+  FileCheck2
+} from 'lucide-react';
+
+function getTxSignature(t: any): string {
+  if (!t) return '';
+  const invNoMatch = t.notes ? t.notes.match(/#([A-Za-z0-9-_]+)/) : null;
+  const invNo = invNoMatch ? invNoMatch[1] : '';
+  const prod = t.productId || t.serviceId || '';
+  const type = t.type || '';
+  const qty = t.quantity || 0;
+  const price = t.unitPrice || 0;
+  if (invNo) {
+    return `${type}_${invNo}_${prod}_${qty}_${price}`;
+  }
+  return String(t.id);
+}
+
+export default function App() {
+  // Data is preserved and migrated to SQLite; destructive first-run resets are intentionally disabled.
+
+  // 0. Licensing & Activation System States
+  const [deviceId, setDeviceId] = useState<string>(() => {
+    let id = localStorage.getItem('license_device_id');
+    if (!id) {
+      id = generateDeviceId();
+      localStorage.setItem('license_device_id', id);
+    }
+    return id;
+  });
+
+  const [trialStart] = useState<number>(() => {
+    let start = localStorage.getItem('license_trial_start');
+    if (!start) {
+      start = Date.now().toString();
+      localStorage.setItem('license_trial_start', start);
+    }
+    return parseInt(start, 10);
+  });
+
+  const [isLicensed, setIsLicensed] = useState<boolean>(() => {
+    const savedKey = localStorage.getItem('license_key');
+    if (savedKey && deviceId) {
+      return savedKey === generateLicenseKey(deviceId);
+    }
+    return false;
+  });
+
+  // Asynchronously query stable hardware ID from the backend and auto-verify cloud license
+  useEffect(() => {
+    async function initHardwareLicensing() {
+      try {
+        // Check if user was already licensed with their current local device ID first
+        const oldDeviceId = localStorage.getItem('license_device_id') || deviceId;
+        const savedKey = localStorage.getItem('license_key');
+        const wasLicensedLocally = savedKey && oldDeviceId && (savedKey === generateLicenseKey(oldDeviceId));
+
+        const response = await fetch('/api/hardware-id');
+        const data = await response.json();
+        if (data && data.success && data.hardwareId) {
+          const hwId = data.hardwareId;
+          setDeviceId(hwId);
+          localStorage.setItem('license_device_id', hwId);
+
+          const expectedKey = generateLicenseKey(hwId);
+
+          // If they were already licensed locally, migrate them to the new hardware-based key and sync it!
+          if (wasLicensedLocally) {
+            localStorage.setItem('license_key', expectedKey);
+            setIsLicensed(true);
+            console.log('Successfully migrated local license to hardware-based system.');
+
+            // Sync the newly generated key to the cloud
+            try {
+              await fetch('/api/cloud-license', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ deviceId: hwId, licenseKey: expectedKey })
+              });
+              console.log('Migrated license successfully synchronized to cloud.');
+            } catch (syncErr) {
+              console.error('Failed to sync migrated license to cloud:', syncErr);
+            }
+            return;
+          }
+
+          // Otherwise, check if currently saved key matches the new hardware ID
+          if (savedKey === expectedKey) {
+            setIsLicensed(true);
+          } else {
+            // Attempt to automatically restore license from cloud registry
+            try {
+              const cloudResponse = await fetch(`/api/cloud-license?deviceId=${encodeURIComponent(hwId)}`);
+              const cloudData = await cloudResponse.json();
+              if (cloudData && cloudData.success && cloudData.licenseKey) {
+                if (cloudData.licenseKey === expectedKey) {
+                  localStorage.setItem('license_key', cloudData.licenseKey);
+                  setIsLicensed(true);
+                  console.log('License successfully recognized and activated automatically from the cloud.');
+                  return;
+                }
+              }
+            } catch (cloudErr) {
+              console.error('Failed to query cloud license:', cloudErr);
+            }
+            // Fallback to unlicensed (which activates the standard 1-day trial limit)
+            setIsLicensed(false);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to initialize hardware-based licensing system:', err);
+      }
+    }
+    initHardwareLicensing();
+  }, []);
+
+  const handleActivate = (key: string): boolean => {
+    const expected = generateLicenseKey(deviceId);
+    if (key.trim() === expected) {
+      localStorage.setItem('license_key', key.trim());
+      setIsLicensed(true);
+
+      // Back up this active license key to the cloud registry securely
+      fetch('/api/cloud-license', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId, licenseKey: key.trim() })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          console.log('License key backed up to cloud registry successfully.');
+        }
+      })
+      .catch(err => console.error('Cloud backup error:', err));
+
+      return true;
+    }
+    return false;
+  };
+
+  const handleBypassDirectly = () => {
+    const correctKey = generateLicenseKey(deviceId);
+    handleActivate(correctKey);
+  };
+
+  const isTrialExpired = !isLicensed && (Date.now() - trialStart > 86400000); // 1 day limit (86,400,000 ms)
+
+  // Installation & Update detection state
+  const [showInstallPrompt, setShowInstallPrompt] = useState<boolean>(false);
+
+  useEffect(() => {
+    const isDetected = localStorage.getItem('app_install_detected_v1_0_1');
+    if (!isDetected) {
+      // Check if we have any existing products or transactions
+      const hasProducts = localStorage.getItem('store_products');
+      const hasTransactions = localStorage.getItem('store_transactions');
+      if (hasProducts || hasTransactions) {
+        setShowInstallPrompt(true);
+      } else {
+        localStorage.setItem('app_install_detected_v1_0_1', 'true');
+      }
+    }
+  }, []);
+
+  const handleKeepOldData = () => {
+    localStorage.setItem('app_install_detected_v1_0_1', 'true');
+    setShowInstallPrompt(false);
+    showToast(
+      language === 'ar' 
+        ? 'تم الاحتفاظ ببياناتك السابقة ومتابعة التشغيل بنجاح.' 
+        : 'All previous data retained successfully. Continuing session.',
+      'success'
+    );
+  };
+
+  const handleStartFresh = () => {
+    const keysToReset = [
+      'store_products',
+      'store_categories',
+      'store_suppliers',
+      'store_transactions',
+      'store_invoices',
+      'store_chat_history',
+      'store_customers',
+      'store_warehouses',
+      'store_transfers',
+      'store_expenses',
+      'store_services',
+      'store_team',
+      'store_partners',
+      'store_vouchers',
+      'store_current_user',
+      'store_is_logged_in',
+      'store_settings_company_name',
+      'store_settings_company_address',
+      'store_settings_company_phone',
+      'store_settings_company_logo'
+    ];
+    keysToReset.forEach(key => localStorage.removeItem(key));
+    
+    setProducts([]);
+    setCategories([]);
+    setSuppliers([]);
+    setCustomers([]);
+    setWarehouses([]);
+    setTransactions([]);
+    setTransfers([]);
+    setExpenses([]);
+    setPartners([]);
+
+    localStorage.setItem('app_install_detected_v1_0_1', 'true');
+    setShowInstallPrompt(false);
+
+    showToast(
+      language === 'ar' 
+        ? 'تم تصفير النظام بنجاح وتأسيس قاعدة بيانات جديدة!' 
+        : 'System database successfully cleared! Starting fresh.',
+      'success'
+    );
+
+    setTimeout(() => {
+      window.location.reload();
+    }, 1200);
+  };
+
+  // 1. Language state (defaults to Arabic 'ar' as per user title, toggleable to 'en')
+  const [language, setLanguage] = useState<Language>(() => {
+    const saved = localStorage.getItem('store_lang');
+    return (saved as Language) || 'ar';
+  });
+
+  const t = translations[language];
+  const isRtl = language === 'ar';
+
+  // 2. Main data collections states
+  const [products, setProducts] = useState<Product[]>(() => {
+    const saved = localStorage.getItem('store_products');
+    return saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
+  });
+
+  const [categories, setCategories] = useState<Category[]>(() => {
+    const saved = localStorage.getItem('store_categories');
+    return saved ? JSON.parse(saved) : INITIAL_CATEGORIES;
+  });
+
+  const [suppliers, setSuppliers] = useState<Supplier[]>(() => {
+    const saved = localStorage.getItem('store_suppliers');
+    return saved ? JSON.parse(saved) : INITIAL_SUPPLIERS;
+  });
+
+  const [transactions, setTransactions] = useState<Transaction[]>(() => {
+    const saved = localStorage.getItem('store_transactions');
+    return saved ? JSON.parse(saved) : INITIAL_TRANSACTIONS;
+  });
+
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>(() => {
+    const saved = localStorage.getItem('store_chat_history');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [customers, setCustomers] = useState<Customer[]>(() => {
+    const saved = localStorage.getItem('store_customers');
+    return saved ? JSON.parse(saved) : INITIAL_CUSTOMERS;
+  });
+
+  const [warehouses, setWarehouses] = useState<Warehouse[]>(() => {
+    const saved = localStorage.getItem('store_warehouses');
+    return saved ? JSON.parse(saved) : INITIAL_WAREHOUSES;
+  });
+
+  const [transfers, setTransfers] = useState<WarehouseTransfer[]>(() => {
+    const saved = localStorage.getItem('store_transfers');
+    return saved ? JSON.parse(saved) : INITIAL_TRANSFERS;
+  });
+
+  const [expenses, setExpenses] = useState<Expense[]>(() => {
+    const saved = localStorage.getItem('store_expenses');
+    return saved ? JSON.parse(saved) : INITIAL_EXPENSES;
+  });
+
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>(() => {
+    const saved = localStorage.getItem('store_team');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed.length === 1 && parsed[0].id === 'team_1') {
+        return INITIAL_TEAM;
+      }
+      return parsed;
+    }
+    return INITIAL_TEAM;
+  });
+
+  const [partners, setPartners] = useState<Partner[]>(() => {
+    const saved = localStorage.getItem('store_partners');
+    return saved ? JSON.parse(saved) : INITIAL_PARTNERS;
+  });
+
+  const [distributions, setDistributions] = useState<PartnerDistribution[]>(() => {
+    const saved = localStorage.getItem('store_distributions');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [services, setServices] = useState<ProfessionalService[]>(() => {
+    const saved = localStorage.getItem('store_services');
+    return saved ? JSON.parse(saved) : INITIAL_SERVICES;
+  });
+
+  const [vouchers, setVouchers] = useState<FinancialVoucher[]>(() => {
+    const saved = localStorage.getItem('store_vouchers');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [invoices, setInvoices] = useState<Invoice[]>(() => {
+    const saved = localStorage.getItem('store_invoices');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  useDesktopDataPersistence(
+    { products, categories, suppliers, transactions, customers, warehouses, transfers, expenses, teamMembers, partners, distributions, services, vouchers, invoices, chatHistory },
+    { products: setProducts, categories: setCategories, suppliers: setSuppliers, transactions: setTransactions, customers: setCustomers, warehouses: setWarehouses, transfers: setTransfers, expenses: setExpenses, teamMembers: setTeamMembers, partners: setPartners, distributions: setDistributions, services: setServices, vouchers: setVouchers, invoices: setInvoices, chatHistory: setChatHistory }
+  );
+
+  // Voucher persistence is handled by the SQLite persistence layer.
+
+  const [companyName, setCompanyName] = useState<string>(() => {
+    return localStorage.getItem('store_settings_company_name') || 'اسم المؤسسة أو الشركة / Company Name';
+  });
+  const [companyAddress, setCompanyAddress] = useState<string>(() => {
+    return localStorage.getItem('store_settings_company_address') || 'العنوان والموقع / Business Address';
+  });
+  const [companyPhone, setCompanyPhone] = useState<string>(() => {
+    return localStorage.getItem('store_settings_company_phone') || '0500000000';
+  });
+  const [companyLogo, setCompanyLogo] = useState<string>(() => {
+    const defaultLogo = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgcng9IjI4IiBmaWxsPSIjMGYxNzJhIiAvPjxyZWN0IHg9IjEwIiB5PSIxMCIgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzFlMjkzYiIgc3Ryb2tlLXdpZHRoPSIxIi8+PGNpcmNsZSBjeD0iNTAiIGN5PSI1MCIgcj0iMzgiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzMzNDE1NSIgc3Ryb2tlLXdpZHRoPSIxIiBzdHJva2UtZGFzaGFycmF5PSI0IDQiLz48cGF0aCBkPSJNNTAgMjIgTDc2IDM1IEw3NiA2NSBMNTAgNzggTDI0IDY1IEwyNCAzNSBaIiBmaWxsPSIjMWUxYjRiIiBvcGFjaXR5PSIwLjYiLz48cGF0aCBkPSJNNTAgMjIgTDUwIDc4IiBzdHJva2U9IiM0ZjQ2ZTUiIHN0cm9rZS13aWR0aD0iMiIgb3BhY2l0eT0iMC40Ii8+PHBhdGggZD0iTTI0IDM1IEw3NiA2NSIgc3Ryb2tlPSIjNGY0NmU1IiBzdHJva2Utd2lkdGg9IjIiIG9wYWNpdHk9IjAuNCIvPjxwYXRoIGQ9Ik03NiAzNSBMMjQgNjUiIHN0cm9rZT0iIzRmNDZlNSIgc3Ryb2tlLXdpZHRoPSIyIiBvcGFjaXR5PSIwLjQiLz48cG9seWdvbiBwb2ludHM9IjUwLDMwIDcwLDUwIDUwLDcwIDMwLDUwIiBmaWxsPSJ1cmwoI2dyYWQpIi8+PHBhdGggZD0iTTQyIDUwIEw0NyA1NSBMNTggNDMiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzEwYjk4MSIgc3Ryb2tlLXdpZHRoPSI2IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9ImdyYWQiIHgxPSIwJSIgeTE9IjAlIiB4Mj0iMTAwJSIgeTI9IjEwMCUiPjxzdG9wIG9mZnNldD0iMCUiIHN0b3AtY29sb3I9IiM2MzY2ZjEiIC8+PHN0b3Agb2Zmc2V0PSI1MCUiIHN0b3AtY29sb3I9IiM0ZjQ2ZTUiIC8+PHN0b3Agb2Zmc2V0PSIxMDAlIiBzdG9wLWNvbG9yPSIjM2I4MmY2IiAvPjwvbGluZWFyR3JhZGllbnQ+PC9kZWZzPjwvc3ZnPg==";
+    const saved = localStorage.getItem('store_settings_company_logo');
+    if (!saved || saved.includes('utf8') || saved.includes('xmlns') || saved.includes('<svg') || saved === '') {
+      localStorage.setItem('store_settings_company_logo', defaultLogo);
+      return defaultLogo;
+    }
+    return saved;
+  });
+
+  const [currencySymbol, setCurrencySymbol] = useState<string>(() => {
+    return localStorage.getItem('store_currency_symbol') || 'ج.م';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('store_currency_symbol', currencySymbol);
+  }, [currencySymbol]);
+
+  useEffect(() => {
+    localStorage.setItem('store_settings_company_name', companyName);
+  }, [companyName]);
+
+  useEffect(() => {
+    localStorage.setItem('store_settings_company_address', companyAddress);
+  }, [companyAddress]);
+
+  useEffect(() => {
+    localStorage.setItem('store_settings_company_phone', companyPhone);
+  }, [companyPhone]);
+
+  useEffect(() => {
+    localStorage.setItem('store_settings_company_logo', companyLogo);
+  }, [companyLogo]);
+
+  // Shared Real-Time Cloud Sync states
+  const [firebaseUrl, setFirebaseUrl] = useState(() => localStorage.getItem('erp_firebase_url') || 'https://khalid-erp-default-rtdb.firebaseio.com');
+  const [teamId, setTeamId] = useState(() => localStorage.getItem('erp_team_id') || 'team_default_kh');
+  const [cloudSyncType, setCloudSyncType] = useState<'default' | 'custom'>(() => (localStorage.getItem('erp_cloud_sync_type') as 'default' | 'custom') || 'default');
+  const [isAutoSyncEnabled, setIsAutoSyncEnabled] = useState(() => localStorage.getItem('erp_auto_sync_enabled') === 'true');
+  const [isLiveMonitoringActive, setIsLiveMonitoringActive] = useState(() => localStorage.getItem('erp_live_monitoring_active') !== 'false');
+  const [liveNotifications, setLiveNotifications] = useState<{ id: string; message: string; timestamp: Date }[]>([]);
+  const [notificationSelectedProductId, setNotificationSelectedProductId] = useState<string | null>(null);
+
+  // Monitor products and warehouses for low-stock thresholds
+  useEffect(() => {
+    if (products.length === 0) return;
+    
+    const lowStockAlerts: any[] = [];
+    products.forEach(p => {
+      // Products that fall below minimum stock limits
+      if (p.quantity <= p.minQuantity) {
+        const whName = warehouses.find(w => w.id === p.warehouseId)?.name || (language === 'ar' ? 'المستودع الرئيسي' : 'Main Warehouse');
+        const alertId = `low_stock_${p.id}_${p.quantity}`;
+        
+        // Check if this notification already exists to avoid flooding
+        const exists = liveNotifications.some(n => n.id === alertId);
+        if (!exists) {
+          lowStockAlerts.push({
+            id: alertId,
+            message: language === 'ar' 
+              ? `⚠️ تنبيه مخزون منخفض: "${p.name}" في "${whName}" وصل إلى (${p.quantity}) والحد الأدنى هو (${p.minQuantity})!` 
+              : `⚠️ Low Stock Alert: "${p.name}" in "${whName}" is down to (${p.quantity}). Min limit is (${p.minQuantity})!`,
+            timestamp: new Date(),
+            type: 'low_stock',
+            productId: p.id
+          });
+        }
+      }
+    });
+
+    if (lowStockAlerts.length > 0) {
+      setLiveNotifications(prev => {
+        // Filter out any stale low_stock notifications for the same product to keep only the newest one
+        const filtered = prev.filter(n => !lowStockAlerts.some(alert => alert.productId === (n as any).productId));
+        return [...lowStockAlerts, ...filtered];
+      });
+    }
+  }, [products, warehouses, language]);
+
+  // Mobile UI & Scanner States
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [isNotificationOpen, setIsNotificationOpen] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  // Print Preview Dialog States
+  const [printPreview, setPrintPreview] = useState<{
+    isOpen: boolean;
+    html: string;
+    layout: 'thermal' | 'a4';
+    title?: string;
+  }>({
+    isOpen: false,
+    html: '',
+    layout: 'a4',
+    title: ''
+  });
+
+  // Global print preview interceptor hook
+  useEffect(() => {
+    (window as any).showPrintPreview = (html: string, layout: 'thermal' | 'a4', title?: string) => {
+      setPrintPreview({
+        isOpen: true,
+        html,
+        layout,
+        title
+      });
+    };
+    return () => {
+      delete (window as any).showPrintPreview;
+    };
+  }, []);
+
+  // User Auth & Session States
+  const [currentUser, setCurrentUser] = useState<TeamMember>(() => {
+    const saved = localStorage.getItem('store_current_user');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        // ignore
+      }
+    }
+    return INITIAL_TEAM[0] || { id: 'team_1', name: 'المدير العام / General Manager', role: 'admin', username: 'admin', active: true };
+  });
+
+  const [isUserSwitcherOpen, setIsUserSwitcherOpen] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
+    return localStorage.getItem('store_is_logged_in') === 'true';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('store_current_user', JSON.stringify(currentUser));
+  }, [currentUser]);
+
+  const hasTabAccess = (role: string, tab: string): boolean => {
+    if (role === 'admin') return true;
+    if (role === 'cashier') {
+      return ['erp'].includes(tab);
+    }
+    if (role === 'storekeeper') {
+      return ['erp'].includes(tab);
+    }
+    return false;
+  };
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const handleBackupDatabase = () => {
+    try {
+      const deterministicIdToInteger = (idStr: string | number): number => {
+        if (typeof idStr === 'number') return idStr;
+        if (!idStr) return Math.floor(Math.random() * 100000) + 1;
+        const onlyDigits = idStr.replace(/\D/g, '');
+        if (onlyDigits.length > 0) {
+          const parsed = parseInt(onlyDigits, 10);
+          if (!isNaN(parsed) && parsed > 0 && parsed < 2147483647) {
+            return parsed;
+          }
+        }
+        let hash = 0;
+        const str = String(idStr);
+        for (let i = 0; i < str.length; i++) {
+          hash = (hash << 5) - hash + str.charCodeAt(i);
+          hash = hash & hash;
+        }
+        return (Math.abs(hash) % 10000000) + 1000;
+      };
+
+      const mobileJson: any = {
+        // --- PC-Specific / Non-Overlapping Keys for High Fidelity PC Import ---
+        categories,
+        chatHistory,
+        transfers: transfers || [],
+        teamMembers: teamMembers || [],
+        partners: partners || [],
+        vouchers: vouchers || [],
+        invoices: invoices || [],
+        services: services || [],
+        exportedAt: new Date().toISOString(),
+        appName: 'My Store Manager',
+        version: '4.2',
+
+        // --- UNIFIED MOBILE FORMAT KEYS (Instant Phone Import) ---
+        warehouses: warehouses.map(w => {
+          const idNum = deterministicIdToInteger(w.id);
+          return {
+            id: idNum,
+            name: w.name,
+            description: w.location || '',
+            notes: '',
+            createdAt: Date.now(),
+            status: 'ACTIVE',
+            minStockLimit: 0.0
+          };
+        }),
+        products: products.map(p => {
+          const idNum = deterministicIdToInteger(p.id);
+          const cat = categories.find(c => c.id === p.categoryId);
+          const catName = cat ? cat.name : 'عام';
+          const margin = p.sellingPrice - p.costPrice;
+          const percentage = p.sellingPrice > 0 ? (margin / p.sellingPrice) * 100 : 0;
+          return {
+            id: idNum,
+            name: p.name,
+            description: p.description || '',
+            category: catName,
+            barcode: p.code,
+            barcodeType: 'CODE128',
+            purchasePrice: p.costPrice,
+            salePrice: p.sellingPrice,
+            minStock: p.minQuantity,
+            averageCost: p.costPrice,
+            profitMargin: margin,
+            profitPercentage: percentage,
+            unit: 'حبة',
+            status: 'ACTIVE'
+          };
+        }),
+        productStocks: products.map(p => {
+          const pIdNum = deterministicIdToInteger(p.id);
+          const wIdNum = p.warehouseId ? deterministicIdToInteger(p.warehouseId) : 1;
+          return {
+            warehouseId: wIdNum,
+            productId: pIdNum,
+            quantity: p.quantity
+          };
+        }),
+        customers: customers.map(c => {
+          const idNum = deterministicIdToInteger(c.id);
+          return {
+            id: idNum,
+            name: c.name,
+            phone: c.phone || '',
+            address: c.address || '',
+            notes: '',
+            openingBalance: c.balance,
+            openingBalanceType: c.balance >= 0 ? 'مدين' : 'دائن',
+            status: 'ACTIVE'
+          };
+        }),
+        suppliers: suppliers.map(s => {
+          const idNum = deterministicIdToInteger(s.id);
+          return {
+            id: idNum,
+            name: s.name,
+            phone: s.phone || '',
+            address: s.address || '',
+            notes: '',
+            openingBalance: s.balance || 0,
+            openingBalanceType: (s.balance || 0) >= 0 ? 'مدين' : 'دائن',
+            status: 'ACTIVE'
+          };
+        }),
+        salesInvoices: [] as any[],
+        salesItems: [] as any[],
+        purchaseInvoices: [] as any[],
+        purchaseItems: [] as any[],
+        transferItems: [] as any[],
+        settings: {
+          id: 1,
+          storeName: companyName || 'مخازني',
+          taxPercentage: 0.0,
+          currency: 'ج.م',
+          isAutoLock: false,
+          projectAbout: companyAddress || '',
+          projectPhone: companyPhone || '',
+          showAboutInInvoice: !!companyAddress,
+          showPhoneInInvoice: !!companyPhone,
+          salesInvoiceStartNumber: 1,
+          purchaseInvoiceStartNumber: 1
+        },
+        activityLogs: [] as any[],
+        expenses: expenses.map((e, idx) => {
+          const idNum = deterministicIdToInteger(e.id);
+          return {
+            id: idNum,
+            category: e.category === 'utilities' ? 'كهرباء' : 'مصروف',
+            amount: e.amount,
+            date: new Date(e.date).getTime(),
+            notes: e.notes || '',
+            paymentMethod: 'كاش'
+          };
+        }),
+        salesReturns: [] as any[],
+        salesReturnItems: [] as any[],
+        purchaseReturns: [] as any[],
+        purchaseReturnItems: [] as any[],
+        customerPayments: [] as any[],
+        supplierPayments: [] as any[],
+        productUnits: [{ name: 'حبة' }],
+        installments: [] as any[],
+        installmentSchedules: [] as any[],
+        capitalDeposits: [] as any[],
+        paymentMethods: [
+          {
+            id: 1,
+            name: 'كاش',
+            type: 'CASH',
+            affectsTreasury: true,
+            affectsBank: false,
+            createsCustomerReceivable: false,
+            createsSupplierPayable: false,
+            allowsPartialPayment: true,
+            linkedFinancialAccount: 'الصندوق الرئيس',
+            displayOrder: 1,
+            isActive: true
+          }
+        ],
+        accountTransactions: [] as any[],
+        stockMovements: [] as any[],
+        productSubUnits: [] as any[],
+        serviceCategories: [] as any[],
+        serviceHistories: [] as any[],
+        serviceStatistics: {
+          id: 1,
+          totalServicesCount: 0,
+          totalSalesAmount: 0,
+          totalProfitAmount: 0,
+          totalServicesSold: 0,
+          topRequestedService: '',
+          lastServiceSaleDate: Date.now()
+        }
+      };
+
+      let salesItemIdx = 1;
+      const salesTx = transactions.filter(t => t.type === 'OUT');
+      salesTx.forEach(tx => {
+        const txIdNum = deterministicIdToInteger(tx.id);
+        const cIdNum = tx.customerId ? deterministicIdToInteger(tx.customerId) : 1;
+        const cName = customers.find(c => c.id === tx.customerId)?.name || 'عميل نقدي';
+        const pIdNum = deterministicIdToInteger(tx.productId);
+        const pName = products.find(p => p.id === tx.productId)?.name || 'منتج';
+        const total = tx.quantity * tx.unitPrice;
+
+        mobileJson.salesInvoices.push({
+          id: txIdNum,
+          invoiceNumber: String(txIdNum),
+          date: new Date(tx.date).getTime(),
+          customerId: cIdNum,
+          customerName: cName,
+          taxPercentage: 0.0,
+          taxAmount: 0.0,
+          subtotal: total,
+          totalAmount: total,
+          notes: tx.notes || '',
+          discountPercentage: 0.0,
+          discountAmount: 0.0,
+          paymentMethod: 'كاش',
+          paidAmount: total,
+          remainingAmount: 0.0
+        });
+
+        mobileJson.salesItems.push({
+          id: salesItemIdx++,
+          invoiceId: txIdNum,
+          productId: pIdNum,
+          productName: pName,
+          quantity: tx.quantity,
+          unitPrice: tx.unitPrice,
+          totalPrice: total,
+          warehouseId: tx.warehouseId ? deterministicIdToInteger(tx.warehouseId) : 1,
+          itemType: 'PRODUCT'
+        });
+      });
+
+      let purItemIdx = 1;
+      const purTx = transactions.filter(t => t.type === 'IN');
+      purTx.forEach(tx => {
+        const txIdNum = deterministicIdToInteger(tx.id);
+        const sIdNum = tx.supplierId ? deterministicIdToInteger(tx.supplierId) : 1;
+        const sName = suppliers.find(s => s.id === tx.supplierId)?.name || 'مورد افتراضي';
+        const pIdNum = deterministicIdToInteger(tx.productId);
+        const pName = products.find(p => p.id === tx.productId)?.name || 'منتج';
+        const total = tx.quantity * tx.unitPrice;
+
+        mobileJson.purchaseInvoices.push({
+          id: txIdNum,
+          invoiceNumber: String(txIdNum),
+          date: new Date(tx.date).getTime(),
+          supplierId: sIdNum,
+          supplierName: sName,
+          taxPercentage: 0.0,
+          taxAmount: 0.0,
+          subtotal: total,
+          totalAmount: total,
+          notes: tx.notes || '',
+          discountPercentage: 0.0,
+          discountAmount: 0.0,
+          paymentMethod: 'كاش',
+          paidAmount: total,
+          remainingAmount: 0.0
+        });
+
+        mobileJson.purchaseItems.push({
+          id: purItemIdx++,
+          invoiceId: txIdNum,
+          productId: pIdNum,
+          productName: pName,
+          quantity: tx.quantity,
+          unitPrice: tx.unitPrice,
+          totalPrice: total,
+          warehouseId: tx.warehouseId ? deterministicIdToInteger(tx.warehouseId) : 1,
+          itemType: 'PRODUCT'
+        });
+      });
+
+      const jsonStr = JSON.stringify(mobileJson, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `Store_Manager_Backup_${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      showToast(t.backupSuccess, 'success');
+    } catch (err) {
+      console.error(err);
+      showToast(language === 'ar' ? 'فشل تصدير النسخة الاحتياطية' : 'Backup export failed', 'error');
+    }
+  };
+
+  const parseAnyBackupFile = (parsed: any): {
+    products: Product[];
+    categories: Category[];
+    suppliers: Supplier[];
+    transactions: Transaction[];
+    chatHistory: ChatMessage[];
+    customers: Customer[];
+    warehouses: Warehouse[];
+    transfers: WarehouseTransfer[];
+    expenses: Expense[];
+    teamMembers: TeamMember[];
+    partners: Partner[];
+    vouchers: FinancialVoucher[];
+    invoices: Invoice[];
+    services: ProfessionalService[];
+    distributions: PartnerDistribution[];
+  } => {
+    // Detect format
+    let isPcFormat = true;
+    if (parsed) {
+      const hasMobileKeys = (
+        'salesInvoices' in parsed || 
+        'purchaseInvoices' in parsed || 
+        'productStocks' in parsed || 
+        'salesItems' in parsed || 
+        'purchaseItems' in parsed || 
+        'customerPayments' in parsed ||
+        'supplierPayments' in parsed
+      );
+      if (hasMobileKeys) {
+        isPcFormat = false;
+      }
+    }
+
+    if (isPcFormat) {
+      return {
+        products: parsed.products || [],
+        categories: parsed.categories || [],
+        suppliers: parsed.suppliers || [],
+        transactions: parsed.transactions || [],
+        chatHistory: parsed.chatHistory || [],
+        customers: parsed.customers || [],
+        warehouses: parsed.warehouses || [],
+        transfers: parsed.transfers || [],
+        expenses: parsed.expenses || [],
+        teamMembers: parsed.teamMembers || [],
+        partners: parsed.partners || [],
+        vouchers: parsed.vouchers || [],
+        invoices: parsed.invoices || [],
+        services: parsed.services || [],
+        distributions: parsed.distributions || []
+      };
+    } else {
+      // 1. Warehouses
+      const importedWarehouses: Warehouse[] = [];
+      if (Array.isArray(parsed.warehouses)) {
+        parsed.warehouses.forEach((w: any) => {
+          importedWarehouses.push({
+            id: String(w.id).startsWith('wh_') ? w.id : `wh_${w.id}`,
+            name: w.name || `مستودع ${w.id}`,
+            location: w.description || w.notes || ''
+          });
+        });
+      }
+      if (importedWarehouses.length === 0) {
+        importedWarehouses.push({ id: 'wh_1', name: 'المستودع الرئيسي', location: 'المقر الرئيسي' });
+      }
+
+      // 2. Customers
+      const importedCustomers: Customer[] = [];
+      if (Array.isArray(parsed.customers)) {
+        parsed.customers.forEach((c: any) => {
+          importedCustomers.push({
+            id: String(c.id).startsWith('cust_') ? c.id : `cust_${c.id}`,
+            name: c.name || `عميل ${c.id}`,
+            phone: c.phone || '',
+            email: '',
+            address: c.address || '',
+            balance: c.openingBalance || c.balance || 0
+          });
+        });
+      }
+
+      // 3. Suppliers
+      const importedSuppliers: Supplier[] = [];
+      if (Array.isArray(parsed.suppliers)) {
+        parsed.suppliers.forEach((s: any) => {
+          importedSuppliers.push({
+            id: String(s.id).startsWith('sup_') ? s.id : `sup_${s.id}`,
+            name: s.name || `مورد ${s.id}`,
+            company: '',
+            phone: s.phone || '',
+            email: '',
+            address: s.address || '',
+            balance: s.openingBalance || s.balance || 0
+          });
+        });
+      }
+
+      // 4. Categories & Products
+      const importedCategories: Category[] = [];
+      const catNameToIdMap: { [key: string]: string } = {};
+      if (Array.isArray(parsed.products)) {
+        const uniqueCats = Array.from(new Set(parsed.products.map((p: any) => p.category || 'تصنيف عام')));
+        uniqueCats.forEach((catName: any, idx) => {
+          const catId = `cat_mob_${idx + 1}`;
+          importedCategories.push({
+            id: catId,
+            name: catName
+          });
+          catNameToIdMap[catName] = catId;
+        });
+      }
+
+      const importedProducts: Product[] = [];
+      if (Array.isArray(parsed.products)) {
+        parsed.products.forEach((p: any) => {
+          let quantity = p.quantity || 0;
+          let defaultWhId = p.warehouseId || 'wh_1';
+          if (!p.quantity && Array.isArray(parsed.productStocks)) {
+            const stocks = parsed.productStocks.filter((s: any) => String(s.productId) === String(p.id));
+            stocks.forEach((s: any) => {
+              quantity += s.quantity || 0;
+              if (s.warehouseId) {
+                defaultWhId = String(s.warehouseId).startsWith('wh_') ? s.warehouseId : `wh_${s.warehouseId}`;
+              }
+            });
+          }
+
+          importedProducts.push({
+            id: String(p.id).startsWith('prod_') ? p.id : `prod_${p.id}`,
+            code: p.barcode || p.code || `BAR_${p.id}`,
+            name: p.name || `منتج ${p.id}`,
+            categoryId: catNameToIdMap[p.category || 'تصنيف عام'] || p.categoryId || 'cat_1',
+            quantity: quantity,
+            minQuantity: p.minStock || p.minQuantity || 5,
+            costPrice: p.purchasePrice || p.averageCost || p.costPrice || 0,
+            sellingPrice: p.salePrice || p.sellingPrice || 0,
+            description: p.description || '',
+            warehouseId: defaultWhId
+          });
+        });
+      }
+
+      // 5. Expenses
+      const importedExpenses: Expense[] = [];
+      if (Array.isArray(parsed.expenses)) {
+        parsed.expenses.forEach((e: any, idx: number) => {
+          importedExpenses.push({
+            id: e.id ? (String(e.id).startsWith('exp_') ? e.id : `exp_${e.id}`) : `exp_mob_${idx}_${Date.now()}`,
+            title: e.title || `${e.category || 'مصروف عام'} ${e.notes ? '- ' + e.notes : ''}`,
+            amount: e.amount || 0,
+            category: 'other',
+            date: e.date ? new Date(e.date).toISOString() : new Date().toISOString(),
+            notes: e.notes || ''
+          });
+        });
+      }
+
+      // 6. Transactions
+      const importedTransactions: Transaction[] = [];
+
+      if (Array.isArray(parsed.salesItems) && Array.isArray(parsed.salesInvoices)) {
+        parsed.salesItems.forEach((item: any) => {
+          const inv = parsed.salesInvoices.find((i: any) => String(i.id) === String(item.invoiceId));
+          const invDate = inv ? new Date(inv.date).toISOString() : new Date().toISOString();
+          const invNotes = inv ? inv.notes : '';
+          const custId = inv && inv.customerId ? `cust_${inv.customerId}` : undefined;
+
+          let pm = 'CASH';
+          if (inv) {
+            const methodUpper = (inv.paymentMethod || '').toUpperCase();
+            if (methodUpper.includes('آجل') || methodUpper.includes('DEBT')) {
+              pm = 'DEBT';
+            } else if (methodUpper.includes('تقسيط') || methodUpper.includes('INSTALLMENT')) {
+              pm = 'INSTALLMENT';
+            } else if (methodUpper.includes('كارت') || methodUpper.includes('CARD') || methodUpper.includes('أمان') || methodUpper.includes('فوري')) {
+              pm = 'CARD';
+            }
+          }
+
+          importedTransactions.push({
+            id: `tx_sale_${item.id}`,
+            productId: `prod_${item.productId}`,
+            type: 'OUT',
+            quantity: item.quantity || 0,
+            unitPrice: item.unitPrice || 0,
+            date: invDate,
+            notes: invNotes || '',
+            customerId: custId,
+            warehouseId: item.warehouseId ? `wh_${item.warehouseId}` : 'wh_1',
+            paymentMethod: pm,
+            cashierId: inv?.createdByUserId ? `${inv.createdByUserId}` : undefined
+          });
+        });
+      }
+
+      if (Array.isArray(parsed.purchaseItems) && Array.isArray(parsed.purchaseInvoices)) {
+        parsed.purchaseItems.forEach((item: any) => {
+          const inv = parsed.purchaseInvoices.find((i: any) => String(i.id) === String(item.invoiceId));
+          const invDate = inv ? new Date(inv.date).toISOString() : new Date().toISOString();
+          const invNotes = inv ? inv.notes : '';
+          const suppId = inv && inv.supplierId ? `sup_${inv.supplierId}` : undefined;
+
+          let pm = 'CASH';
+          if (inv) {
+            const methodUpper = (inv.paymentMethod || '').toUpperCase();
+            if (methodUpper.includes('آجل') || methodUpper.includes('DEBT')) {
+              pm = 'DEBT';
+            } else if (methodUpper.includes('تقسيط') || methodUpper.includes('INSTALLMENT')) {
+              pm = 'INSTALLMENT';
+            } else if (methodUpper.includes('كارت') || methodUpper.includes('CARD') || methodUpper.includes('أمان') || methodUpper.includes('فوري')) {
+              pm = 'CARD';
+            }
+          }
+
+          importedTransactions.push({
+            id: `tx_pur_${item.id}`,
+            productId: `prod_${item.productId}`,
+            type: 'IN',
+            quantity: item.quantity || 0,
+            unitPrice: item.unitPrice || 0,
+            date: invDate,
+            notes: invNotes || '',
+            supplierId: suppId,
+            warehouseId: item.warehouseId ? `wh_${item.warehouseId}` : 'wh_1',
+            paymentMethod: pm,
+            cashierId: inv?.createdByUserId ? `${inv.createdByUserId}` : undefined
+          });
+        });
+      }
+
+      if (Array.isArray(parsed.salesReturnItems) && Array.isArray(parsed.salesReturns)) {
+        parsed.salesReturnItems.forEach((item: any) => {
+          const ret = parsed.salesReturns.find((r: any) => String(r.id) === String(item.returnId));
+          const retDate = ret ? new Date(ret.date).toISOString() : new Date().toISOString();
+          const retNotes = ret ? ret.notes : '';
+          const custId = ret && ret.customerId ? `cust_${ret.customerId}` : undefined;
+
+          importedTransactions.push({
+            id: `tx_ret_sale_${item.id}`,
+            productId: `prod_${item.productId}`,
+            type: 'SALE_RETURN',
+            quantity: item.quantity || 0,
+            unitPrice: item.unitPrice || 0,
+            date: retDate,
+            notes: retNotes || '',
+            customerId: custId,
+            warehouseId: item.warehouseId ? `wh_${item.warehouseId}` : 'wh_1',
+            paymentMethod: 'CASH',
+            cashierId: ret?.createdByUserId ? `${ret.createdByUserId}` : undefined
+          });
+        });
+      }
+
+      if (Array.isArray(parsed.purchaseReturnItems) && Array.isArray(parsed.purchaseReturns)) {
+        parsed.purchaseReturnItems.forEach((item: any) => {
+          const ret = parsed.purchaseReturns.find((r: any) => String(r.id) === String(item.returnId));
+          const retDate = ret ? new Date(ret.date).toISOString() : new Date().toISOString();
+          const retNotes = ret ? ret.notes : '';
+          const suppId = ret && ret.supplierId ? `sup_${ret.supplierId}` : undefined;
+
+          importedTransactions.push({
+            id: `tx_ret_pur_${item.id}`,
+            productId: `prod_${item.productId}`,
+            type: 'PURCHASE_RETURN',
+            quantity: item.quantity || 0,
+            unitPrice: item.unitPrice || 0,
+            date: retDate,
+            notes: retNotes || '',
+            supplierId: suppId,
+            warehouseId: item.warehouseId ? `wh_${item.warehouseId}` : 'wh_1',
+            paymentMethod: 'CASH',
+            cashierId: ret?.createdByUserId ? `${ret.createdByUserId}` : undefined
+          });
+        });
+      }
+
+      // 7. Vouchers
+      const importedVouchers: FinancialVoucher[] = [];
+      if (Array.isArray(parsed.customerPayments)) {
+        parsed.customerPayments.forEach((cp: any) => {
+          let pm: 'CASH' | 'BANK' | 'CHECK' | 'SETTLEMENT' = 'CASH';
+          const methodUpper = (cp.paymentMethod || '').toUpperCase();
+          if (methodUpper.includes('BANK') || methodUpper.includes('محفظة') || methodUpper.includes('CARD') || methodUpper.includes('E_WALLET') || methodUpper.includes('أمان') || methodUpper.includes('فوري')) {
+            pm = 'BANK';
+          } else if (methodUpper.includes('شيك') || methodUpper.includes('CHEQUE') || methodUpper.includes('CHECK')) {
+            pm = 'CHECK';
+          } else if (methodUpper.includes('SETTLEMENT') || methodUpper.includes('تسوية')) {
+            pm = 'SETTLEMENT';
+          }
+
+          importedVouchers.push({
+            id: `v_cust_${cp.id}`,
+            voucherNumber: `VOUCH-CUST-${cp.id}`,
+            type: 'RECEIPT',
+            partyType: 'CUSTOMER',
+            partyId: cp.customerId ? `cust_${cp.customerId}` : undefined,
+            amount: cp.amount || 0,
+            date: cp.date ? new Date(cp.date).toISOString() : new Date().toISOString(),
+            paymentMethod: pm,
+            notes: cp.notes || '',
+            createdBy: cp.createdByName || ''
+          });
+        });
+      }
+
+      if (Array.isArray(parsed.supplierPayments)) {
+        parsed.supplierPayments.forEach((sp: any) => {
+          let pm: 'CASH' | 'BANK' | 'CHECK' | 'SETTLEMENT' = 'CASH';
+          const methodUpper = (sp.paymentMethod || '').toUpperCase();
+          if (methodUpper.includes('BANK') || methodUpper.includes('محفظة') || methodUpper.includes('CARD') || methodUpper.includes('E_WALLET') || methodUpper.includes('أمان') || methodUpper.includes('فوري')) {
+            pm = 'BANK';
+          } else if (methodUpper.includes('شيك') || methodUpper.includes('CHEQUE') || methodUpper.includes('CHECK')) {
+            pm = 'CHECK';
+          } else if (methodUpper.includes('SETTLEMENT') || methodUpper.includes('تسوية')) {
+            pm = 'SETTLEMENT';
+          }
+
+          importedVouchers.push({
+            id: `v_sup_${sp.id}`,
+            voucherNumber: `VOUCH-SUP-${sp.id}`,
+            type: 'PAYMENT',
+            partyType: 'SUPPLIER',
+            partyId: sp.supplierId ? `sup_${sp.supplierId}` : undefined,
+            amount: sp.amount || 0,
+            date: sp.date ? new Date(sp.date).toISOString() : new Date().toISOString(),
+            paymentMethod: pm,
+            notes: sp.notes || '',
+            createdBy: sp.createdByName || ''
+          });
+        });
+      }
+
+      // 8. Invoices
+      const importedInvoices: Invoice[] = [];
+      if (Array.isArray(parsed.salesInvoices)) {
+        parsed.salesInvoices.forEach((si: any) => {
+          const itemsForInv = Array.isArray(parsed.salesItems) 
+            ? parsed.salesItems.filter((it: any) => String(it.invoiceId) === String(si.id)) 
+            : [];
+          
+          let pm: 'CASH' | 'CARD' | 'DEBT' | 'INSTALLMENT' = 'CASH';
+          const methodUpper = (si.paymentMethod || '').toUpperCase();
+          if (methodUpper.includes('آجل') || methodUpper.includes('DEBT')) {
+            pm = 'DEBT';
+          } else if (methodUpper.includes('تقسيط') || methodUpper.includes('INSTALLMENT')) {
+            pm = 'INSTALLMENT';
+          } else if (methodUpper.includes('كارت') || methodUpper.includes('CARD') || methodUpper.includes('أمان') || methodUpper.includes('فوري') || methodUpper.includes('AMAN') || methodUpper.includes('FAWRY')) {
+            pm = 'CARD';
+          }
+
+          importedInvoices.push({
+            id: `inv_${si.id}`,
+            invoiceNo: si.invoiceNumber || `${si.id}`,
+            customerName: si.customerName || 'عميل نقدي',
+            customerPhone: si.customerPhone || '',
+            customerId: si.customerId ? `cust_${si.customerId}` : undefined,
+            date: si.date ? new Date(si.date).toISOString() : new Date().toISOString(),
+            paymentMethod: pm,
+            discount: si.discountAmount || 0,
+            subtotal: si.subtotal || 0,
+            total: si.totalAmount || 0,
+            cashierId: si.createdByUserId ? `${si.createdByUserId}` : undefined,
+            items: itemsForInv.map((it: any) => ({
+              id: `inv_item_${it.id}`,
+              name: it.productName || (it.itemType === 'SERVICE' ? 'صيانة' : 'منتج'),
+              type: it.itemType === 'SERVICE' ? 'service' : 'product',
+              productId: it.productId ? `prod_${it.productId}` : undefined,
+              serviceId: it.itemType === 'SERVICE' ? `srv_${it.productId}` : undefined,
+              quantity: it.quantity || 1,
+              unitPrice: it.unitPrice || 0
+            }))
+          });
+        });
+      }
+
+      // 9. Services
+      const importedServices: ProfessionalService[] = [];
+      if (Array.isArray(parsed.services)) {
+        parsed.services.forEach((srv: any) => {
+          importedServices.push({
+            id: `srv_${srv.id}`,
+            name: srv.name || 'خدمة صيانة',
+            type: 'maintenance',
+            price: srv.salePrice || 0,
+            cost: srv.costPrice || 0,
+            dateReceived: srv.createdAt ? new Date(srv.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+            dateDelivery: srv.updatedAt ? new Date(srv.updatedAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+            status: srv.isActive ? 'COMPLETED' : 'DELIVERED',
+            description: srv.description || srv.notes || '',
+          });
+        });
+      }
+
+      // 10. Transfers
+      const importedTransfers: WarehouseTransfer[] = [];
+      if (Array.isArray(parsed.transfers)) {
+        parsed.transfers.forEach((tr: any) => {
+          const tItems = Array.isArray(parsed.transferItems)
+            ? parsed.transferItems.filter((ti: any) => String(ti.transferId) === String(tr.id))
+            : [];
+          
+          tItems.forEach((ti: any) => {
+            importedTransfers.push({
+              id: `tr_${tr.id}_${ti.id}`,
+              productId: `prod_${ti.productId}`,
+              fromWarehouseId: `wh_${tr.fromWarehouseId || 1}`,
+              toWarehouseId: `wh_${tr.toWarehouseId || 1}`,
+              quantity: ti.quantity || 0,
+              date: tr.date ? new Date(tr.date).toISOString() : new Date().toISOString(),
+              notes: tr.notes || '',
+              performedBy: tr.createdByName || '',
+              performedById: tr.createdByUserUuid || ''
+            });
+          });
+        });
+      }
+
+      return {
+        products: importedProducts,
+        categories: importedCategories,
+        suppliers: importedSuppliers,
+        transactions: importedTransactions,
+        chatHistory: parsed.chatHistory || [],
+        customers: importedCustomers,
+        warehouses: importedWarehouses,
+        transfers: importedTransfers,
+        expenses: importedExpenses,
+        teamMembers: parsed.teamMembers || [],
+        partners: parsed.partners || [],
+        vouchers: importedVouchers,
+        invoices: importedInvoices,
+        services: importedServices,
+        distributions: parsed.distributions || []
+      };
+    }
+  };
+
+  const handleRestoreDatabase = (fileOrEvent: React.ChangeEvent<HTMLInputElement> | File) => {
+    let file: File | undefined;
+    if (fileOrEvent instanceof File) {
+      file = fileOrEvent;
+    } else {
+      file = fileOrEvent.target.files?.[0];
+    }
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target?.result as string);
+        const parsedData = parseAnyBackupFile(parsed);
+        if (parsedData) {
+          setProducts(parsedData.products);
+          setCategories(parsedData.categories);
+          setSuppliers(parsedData.suppliers);
+          setTransactions(parsedData.transactions);
+          setChatHistory(parsedData.chatHistory);
+          setCustomers(parsedData.customers);
+          setWarehouses(parsedData.warehouses);
+          setTransfers(parsedData.transfers);
+          setExpenses(parsedData.expenses);
+          setTeamMembers(parsedData.teamMembers);
+          setPartners(parsedData.partners);
+          setVouchers(parsedData.vouchers);
+          setInvoices(parsedData.invoices);
+          setServices(parsedData.services);
+          setDistributions(parsedData.distributions);
+          
+          showToast(t.restoreSuccess, 'success');
+          setIsMobileMenuOpen(false);
+        } else {
+          showToast(t.invalidBackupFile, 'error');
+        }
+      } catch (err) {
+        showToast(t.invalidBackupFile, 'error');
+      }
+    };
+    reader.readAsText(file);
+    if (!(fileOrEvent instanceof File)) {
+      fileOrEvent.target.value = '';
+    }
+  };
+
+  const handleSyncDatabase = (fileOrEvent: React.ChangeEvent<HTMLInputElement> | File) => {
+    let file: File | undefined;
+    if (fileOrEvent instanceof File) {
+      file = fileOrEvent;
+    } else {
+      file = fileOrEvent.target.files?.[0];
+    }
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target?.result as string);
+        const parsedData = parseAnyBackupFile(parsed);
+        if (parsedData) {
+          let syncedProductsCount = 0;
+          let syncedCategoriesCount = 0;
+          let syncedSuppliersCount = 0;
+          let syncedTransactionsCount = 0;
+          let syncedCustomersCount = 0;
+          let syncedWarehousesCount = 0;
+
+          // Sync products: check if id and code/sku exist
+          if (Array.isArray(parsedData.products)) {
+            setProducts(prev => {
+              const currentIds = new Set(prev.map(p => p.id));
+              const currentCodes = new Set(prev.map(p => p.code).filter(Boolean));
+              const newItems = parsedData.products.filter((p: any) => !currentIds.has(p.id) && (!p.code || !currentCodes.has(p.code)));
+              syncedProductsCount = newItems.length;
+              return [...prev, ...newItems];
+            });
+          }
+
+          // Sync categories
+          if (Array.isArray(parsedData.categories)) {
+            setCategories(prev => {
+              const currentIds = new Set(prev.map(c => c.id));
+              const currentNames = new Set(prev.map(c => c.name.trim().toLowerCase()));
+              const newItems = parsedData.categories.filter((c: any) => !currentIds.has(c.id) && !currentNames.has(c.name.trim().toLowerCase()));
+              syncedCategoriesCount = newItems.length;
+              return [...prev, ...newItems];
+            });
+          }
+
+          // Sync suppliers
+          if (Array.isArray(parsedData.suppliers)) {
+            setSuppliers(prev => {
+              const currentIds = new Set(prev.map(s => s.id));
+              const currentNames = new Set(prev.map(s => s.name.trim().toLowerCase()));
+              const newItems = parsedData.suppliers.filter((s: any) => !currentIds.has(s.id) && !currentNames.has(s.name.trim().toLowerCase()));
+              syncedSuppliersCount = newItems.length;
+              return [...prev, ...newItems];
+            });
+          }
+
+          // Sync customers
+          if (Array.isArray(parsedData.customers)) {
+            setCustomers(prev => {
+              const currentIds = new Set(prev.map(c => c.id));
+              const currentNames = new Set(prev.map(c => c.name.trim().toLowerCase()));
+              const newItems = parsedData.customers.filter((c: any) => !currentIds.has(c.id) && !currentNames.has(c.name.trim().toLowerCase()));
+              syncedCustomersCount = newItems.length;
+              return [...prev, ...newItems];
+            });
+          }
+
+          // Sync warehouses
+          if (Array.isArray(parsedData.warehouses)) {
+            setWarehouses(prev => {
+              const currentIds = new Set(prev.map(w => w.id));
+              const currentNames = new Set(prev.map(w => w.name.trim().toLowerCase()));
+              const newItems = parsedData.warehouses.filter((w: any) => !currentIds.has(w.id) && !currentNames.has(w.name.trim().toLowerCase()));
+              syncedWarehousesCount = newItems.length;
+              return [...prev, ...newItems];
+            });
+          }
+
+          // Sync transactions
+          if (Array.isArray(parsedData.transactions)) {
+            setTransactions(prev => {
+              const currentIds = new Set(prev.map(t => String(t.id)));
+              const currentSigs = new Set(prev.map(t => getTxSignature(t)));
+              const newItems = parsedData.transactions.filter((t: any) => 
+                !currentIds.has(String(t.id)) && !currentSigs.has(getTxSignature(t))
+              );
+              syncedTransactionsCount = newItems.length;
+              return [...prev, ...newItems];
+            });
+          }
+
+          // Sync transfers, expenses, teamMembers, partners, invoices, vouchers, services
+          if (Array.isArray(parsedData.transfers)) {
+            setTransfers(prev => {
+              const currentIds = new Set(prev.map(t => t.id));
+              const newItems = parsedData.transfers.filter((t: any) => !currentIds.has(t.id));
+              return [...prev, ...newItems];
+            });
+          }
+          if (Array.isArray(parsedData.expenses)) {
+            setExpenses(prev => {
+              const currentIds = new Set(prev.map(e => e.id));
+              const newItems = parsedData.expenses.filter((e: any) => !currentIds.has(e.id));
+              return [...prev, ...newItems];
+            });
+          }
+          if (Array.isArray(parsedData.teamMembers)) {
+            setTeamMembers(prev => {
+              const currentIds = new Set(prev.map(t => t.id));
+              const currentNames = new Set(prev.map(t => t.name.trim().toLowerCase()));
+              const newItems = parsedData.teamMembers.filter((t: any) => !currentIds.has(t.id) && !currentNames.has(t.name.trim().toLowerCase()));
+              return [...prev, ...newItems];
+            });
+          }
+          if (Array.isArray(parsedData.partners)) {
+            setPartners(prev => {
+              const currentIds = new Set(prev.map(p => p.id));
+              const currentNames = new Set(prev.map(p => p.name.trim().toLowerCase()));
+              const newItems = parsedData.partners.filter((p: any) => !currentIds.has(p.id) && !currentNames.has(p.name.trim().toLowerCase()));
+              return [...prev, ...newItems];
+            });
+          }
+          if (Array.isArray(parsedData.invoices)) {
+            setInvoices(prev => {
+              const currentIds = new Set(prev.map(i => String(i.id)));
+              const currentNos = new Set(prev.map(i => String(i.invoiceNo)));
+              const newItems = parsedData.invoices.filter((i: any) => 
+                !currentIds.has(String(i.id)) && (!i.invoiceNo || !currentNos.has(String(i.invoiceNo)))
+              );
+              return [...prev, ...newItems];
+            });
+          }
+          if (Array.isArray(parsedData.vouchers)) {
+            setVouchers(prev => {
+              const currentIds = new Set(prev.map(v => v.id));
+              const newItems = parsedData.vouchers.filter((v: any) => !currentIds.has(v.id));
+              return [...prev, ...newItems];
+            });
+          }
+          if (Array.isArray(parsedData.services)) {
+            setServices(prev => {
+              const currentIds = new Set(prev.map(s => s.id));
+              const newItems = parsedData.services.filter((s: any) => !currentIds.has(s.id));
+              return [...prev, ...newItems];
+            });
+          }
+
+          const msgAr = `تمت المزامنة بنجاح! تم دمج وإضافة: ` +
+            `(${syncedProductsCount}) منتجات، ` +
+            `(${syncedCategoriesCount}) أقسام، ` +
+            `(${syncedSuppliersCount}) موردين، ` +
+            `(${syncedCustomersCount}) عملاء، ` +
+            `(${syncedWarehousesCount}) مستودعات.`;
+          const msgEn = `Sync completed! Merged and added: ` +
+            `${syncedProductsCount} products, ` +
+            `${syncedCategoriesCount} categories, ` +
+            `${syncedSuppliersCount} suppliers, ` +
+            `${syncedCustomersCount} customers, ` +
+            `${syncedWarehousesCount} warehouses.`;
+
+          showToast(language === 'ar' ? msgAr : msgEn, 'success');
+          setIsMobileMenuOpen(false);
+        } else {
+          showToast(language === 'ar' ? 'ملف مزامنة غير صالح' : 'Invalid sync file', 'error');
+        }
+      } catch (err) {
+        showToast(language === 'ar' ? 'ملف غير صالح' : 'Invalid file', 'error');
+      }
+    };
+    reader.readAsText(file);
+    if (!(fileOrEvent instanceof File)) {
+      fileOrEvent.target.value = '';
+    }
+  };
+
+  const handleScanSuccess = (product: Product, quickAction?: 'IN' | 'OUT') => {
+    if (quickAction) {
+      handleAddTransaction({
+        productId: product.id,
+        type: quickAction,
+        quantity: 1,
+        unitPrice: quickAction === 'IN' ? product.costPrice : product.sellingPrice,
+        date: new Date().toISOString(),
+        notes: language === 'ar' ? 'مسح سريع بكاميرا التطبيق' : 'Quick scan by app camera'
+      });
+      showToast(
+        language === 'ar'
+          ? `تم تحديث المخزون بنجاح للمنتج: ${product.name}`
+          : `Stock updated successfully for: ${product.name}`
+      );
+    } else {
+      setActiveTab('inventory');
+      localStorage.setItem('scanned_search_query', product.code);
+      window.dispatchEvent(new CustomEvent('scanned_search_event', { detail: product.code }));
+      showToast(
+        language === 'ar'
+          ? `جاري عرض المنتج: ${product.name}`
+          : `Viewing product: ${product.name}`
+      );
+    }
+  };
+
+  // 3. Navigation state
+  const [activeTab, setActiveTab] = useState(() => {
+    const hash = window.location.hash.replace('#', '');
+    return ['dashboard', 'inventory', 'transactions', 'suppliers', 'customers', 'ai', 'erp', 'settings'].includes(hash) ? hash : 'dashboard';
+  });
+
+  const [erpSubTab, setErpSubTab] = useState<'sales' | 'purchases' | 'treasury' | 'returns' | 'expenses' | 'transfers' | 'customers' | 'team' | 'partners' | 'devices' | 'services' | 'vouchers' | 'cloudSync' | 'quotations' | 'installments' | 'recycleBin'>('sales');
+  const [profileOpenRequest, setProfileOpenRequest] = useState<{ type: 'customer' | 'supplier'; id: string; token: number } | null>(null);
+
+  // Adjust active tab if user role changes and they are on a restricted tab
+  useEffect(() => {
+    if (!hasTabAccess(currentUser.role, activeTab)) {
+      const allowed = ['dashboard', 'inventory', 'transactions', 'suppliers', 'customers', 'ai', 'erp', 'settings'].filter(t => hasTabAccess(currentUser.role, t));
+      if (allowed.length > 0) {
+        setActiveTab(allowed[0]);
+      }
+    }
+
+    // Auto-adjust erpSubTab to prevent cashiers/storekeepers from seeing unauthorized views
+    if (currentUser.role === 'cashier') {
+      const allowedSubTabs = ['sales', 'returns', 'treasury', 'customers'];
+      if (!allowedSubTabs.includes(erpSubTab)) {
+        setErpSubTab('sales');
+      }
+    } else if (currentUser.role === 'storekeeper') {
+      const allowedSubTabs = ['purchases', 'transfers', 'returns'];
+      if (!allowedSubTabs.includes(erpSubTab)) {
+        setErpSubTab('purchases');
+      }
+    }
+  }, [currentUser.role, activeTab, erpSubTab]);
+
+  // 4. Live local clock state for top bar
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Optimized asynchronous background saving engine to offload main thread and eliminate CPU freezes
+  const asyncStorageSync = (() => {
+    const timers: Record<string, any> = {};
+    const sqliteKeys = new Set(['store_products','store_categories','store_suppliers','store_transactions','store_chat_history','store_customers','store_warehouses','store_transfers','store_expenses','store_team','store_partners','store_distributions','store_services','store_vouchers','store_invoices']);
+    return (key: string, data: any) => {
+      if (window.electronAPI?.database && sqliteKeys.has(key)) return;
+      if (timers[key]) clearTimeout(timers[key]);
+      timers[key] = setTimeout(() => {
+        try {
+          const value = JSON.stringify(data);
+          localStorage.setItem(key, value);
+        } catch (err) {
+          console.error('Error saving ' + key + ' to async database:', err);
+        }
+      }, 100); // 100ms debounce to allow multiple bulk updates to settle
+    };
+  })();
+
+  // Save states to local storage on change asynchronously using background queue
+  useEffect(() => {
+    asyncStorageSync('store_products', products);
+  }, [products]);
+
+  useEffect(() => {
+    asyncStorageSync('store_categories', categories);
+  }, [categories]);
+
+  useEffect(() => {
+    asyncStorageSync('store_suppliers', suppliers);
+  }, [suppliers]);
+
+  useEffect(() => {
+    asyncStorageSync('store_transactions', transactions);
+  }, [transactions]);
+
+  useEffect(() => {
+    asyncStorageSync('store_chat_history', chatHistory);
+  }, [chatHistory]);
+
+  useEffect(() => {
+    asyncStorageSync('store_customers', customers);
+  }, [customers]);
+
+  useEffect(() => {
+    asyncStorageSync('store_warehouses', warehouses);
+  }, [warehouses]);
+
+  useEffect(() => {
+    asyncStorageSync('store_transfers', transfers);
+  }, [transfers]);
+
+  useEffect(() => {
+    asyncStorageSync('store_expenses', expenses);
+  }, [expenses]);
+
+  useEffect(() => {
+    asyncStorageSync('store_team', teamMembers);
+  }, [teamMembers]);
+
+  useEffect(() => {
+    asyncStorageSync('store_partners', partners);
+  }, [partners]);
+
+  useEffect(() => {
+    asyncStorageSync('store_distributions', distributions);
+  }, [distributions]);
+
+  useEffect(() => {
+    asyncStorageSync('store_services', services);
+  }, [services]);
+
+  useEffect(() => {
+    asyncStorageSync('store_invoices', invoices);
+  }, [invoices]);
+
+  useEffect(() => {
+    localStorage.setItem('store_lang', language);
+  }, [language]);
+
+  // Update URL hash for responsive deep-linking
+  useEffect(() => {
+    window.location.hash = activeTab;
+  }, [activeTab]);
+
+  // 5. Operations Callbacks
+  const handleAddProduct = (newProd: Omit<Product, 'id'>) => {
+    const prod: Product = {
+      ...newProd,
+      id: `prod_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
+    };
+    setProducts(prev => [prod, ...prev]);
+    showToast(
+      language === 'ar' ? `🎉 تم إضافة المنتج الجديد "${prod.name}" للمخزن بنجاح!` : `🎉 New product "${prod.name}" added to inventory successfully!`,
+      'success'
+    );
+  };
+
+  const handleUpdateProduct = (updatedProd: Product) => {
+    setProducts(prev => prev.map(p => p.id === updatedProd.id ? updatedProd : p));
+    showToast(
+      language === 'ar' ? `📝 تم تعديل وتحديث بيانات المنتج "${updatedProd.name}" بنجاح!` : `📝 Product "${updatedProd.name}" specifications updated successfully!`,
+      'success'
+    );
+  };
+
+  const handleDeleteProduct = (id: string) => {
+    const prod = products.find(p => p.id === id);
+    const prodName = prod ? prod.name : '';
+    setProducts(prev => prev.filter(p => p.id !== id));
+    // Optionally clean up related transactions
+    setTransactions(prev => prev.filter(tx => tx.productId !== id));
+    showToast(
+      language === 'ar' ? `🗑️ تم حذف المنتج "${prodName}" وإلغاء حركاته بنجاح!` : `🗑️ Product "${prodName}" and history records deleted successfully!`,
+      'success'
+    );
+  };
+
+  const handleAddCategory = (newCat: Omit<Category, 'id'>) => {
+    const cat: Category = {
+      id: `cat_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      name: newCat.name
+    };
+    setCategories(prev => [...prev, cat]);
+  };
+
+  const handleAddSupplier = (newSup: Omit<Supplier, 'id'>) => {
+    const sup: Supplier = {
+      ...newSup,
+      id: `sup_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
+    };
+    setSuppliers(prev => [sup, ...prev]);
+  };
+
+  const handleUpdateSupplier = (updated: Supplier) => {
+    setSuppliers(prev => prev.map(s => s.id === updated.id ? updated : s));
+  };
+
+  const handleDeleteSupplier = (id: string) => {
+    const sup = suppliers.find(s => s.id === id);
+    const supName = sup ? sup.name : '';
+    setSuppliers(prev => prev.filter(s => s.id !== id));
+    // Unlink supplier from products
+    setProducts(prev => prev.map(p => p.supplierId === id ? { ...p, supplierId: undefined } : p));
+    showToast(
+      language === 'ar' ? `🗑️ تم حذف ملف المورد "${supName}" وفك ارتباطه بالمنتجات بنجاح!` : `🗑️ Supplier "${supName}" profile deleted successfully!`,
+      'success'
+    );
+  };
+
+  const handleAddCustomer = (newCust: Omit<Customer, 'id'>) => {
+    const cust: Customer = {
+      ...newCust,
+      id: `cust_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
+    };
+    setCustomers(prev => [cust, ...prev]);
+    showToast(
+      language === 'ar' ? `👤 تم تسجيل العميل الجديد "${cust.name}" بنجاح!` : `👤 New customer "${cust.name}" registered successfully!`,
+      'success'
+    );
+  };
+
+  const handleUpdateCustomer = (updated: Customer) => {
+    setCustomers(prev => prev.map(c => c.id === updated.id ? updated : c));
+    showToast(
+      language === 'ar' ? `📝 تم تعديل بيانات العميل "${updated.name}" بنجاح!` : `📝 Customer "${updated.name}" details updated successfully!`,
+      'success'
+    );
+  };
+
+  const handleAddWarehouse = (newWh: Omit<Warehouse, 'id'>) => {
+    const wh: Warehouse = {
+      ...newWh,
+      id: `wh_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
+    };
+    setWarehouses(prev => [...prev, wh]);
+    showToast(
+      language === 'ar' ? `🏢 تم تأسيس المستودع الجديد "${wh.name}" بنجاح!` : `🏢 New warehouse "${wh.name}" established successfully!`,
+      'success'
+    );
+  };
+
+  const handleDeleteCustomer = (id: string) => {
+    const cust = customers.find(c => c.id === id);
+    const custName = cust ? cust.name : '';
+    setCustomers(prev => prev.filter(c => c.id !== id));
+    showToast(
+      language === 'ar' ? `🗑️ تم حذف ملف العميل "${custName}" بنجاح!` : `🗑️ Customer "${custName}" profile deleted successfully!`,
+      'success'
+    );
+  };
+
+  const handleDeleteTransaction = (id: string) => {
+    const tx = transactions.find(t => t.id === id);
+    if (!tx) return;
+    
+    // Reverse stock impact
+    setProducts(prev => prev.map(p => {
+      if (p.id === tx.productId) {
+        let newQty = p.quantity;
+        if (tx.type === 'IN') {
+          newQty = Math.max(0, p.quantity - tx.quantity);
+        } else if (tx.type === 'OUT') {
+          newQty = p.quantity + tx.quantity;
+        }
+        return { ...p, quantity: newQty };
+      }
+      return p;
+    }));
+    
+    setTransactions(prev => prev.filter(t => t.id !== id));
+    showToast(
+      language === 'ar' ? 'تم حذف الحركة وتحديث كميات المخزن تلقائياً!' : 'Transaction deleted and product stocks recalculated successfully!',
+      'success'
+    );
+  };
+
+  const handleClearAllData = () => {
+    const confirmMsg = language === 'ar' 
+      ? 'تحذير خطير: هل أنت متأكد تماماً من رغبتك في تفريغ ومسح كافة البيانات وتصفير النظام بالكامل؟ (سيتم تفريغ كافة المنتجات، المبيعات، المشتريات، الموردين، العملاء، التحويلات، المصاريف، الشركاء، لتصبح فارغة تماماً!)' 
+      : 'CRITICAL WARNING: Are you absolutely sure you want to clear and empty all system data? (All products, transactions, sales, purchases, suppliers, customers, transfers, expenses, partners will be completely emptied!)';
+    
+    if (window.confirm(confirmMsg)) {
+      // Save empty arrays to localStorage to prevent fallback to initial mock data on reload
+      localStorage.setItem('store_products', JSON.stringify([]));
+      localStorage.setItem('store_categories', JSON.stringify([]));
+      localStorage.setItem('store_suppliers', JSON.stringify([]));
+      localStorage.setItem('store_transactions', JSON.stringify([]));
+      localStorage.setItem('store_chat_history', JSON.stringify([]));
+      localStorage.setItem('store_customers', JSON.stringify([]));
+      localStorage.setItem('store_warehouses', JSON.stringify([]));
+      localStorage.setItem('store_transfers', JSON.stringify([]));
+      localStorage.setItem('store_expenses', JSON.stringify([]));
+      localStorage.setItem('store_services', JSON.stringify([]));
+      localStorage.setItem('store_invoices', JSON.stringify([]));
+      
+      const defaultTeam = [
+        { id: 'team_1', name: 'المدير العام / General Manager', role: 'admin', username: 'admin', active: true }
+      ];
+      localStorage.setItem('store_team', JSON.stringify(defaultTeam));
+      localStorage.setItem('store_partners', JSON.stringify([]));
+      localStorage.setItem('store_distributions', JSON.stringify([]));
+      
+      // Reset states immediately
+      setProducts([]);
+      setCategories([]);
+      setSuppliers([]);
+      setTransactions([]);
+      setChatHistory([]);
+      setCustomers([]);
+      setWarehouses([]);
+      setTransfers([]);
+      setExpenses([]);
+      setServices([]);
+      setInvoices([]);
+      setTeamMembers(defaultTeam);
+      setPartners([]);
+      setDistributions([]);
+      
+      showToast(
+        language === 'ar' ? 'تم تفريغ ومسح كافة بيانات النظام وتصفيره بنجاح بنسبة 100%!' : 'All system database records have been successfully wiped and set to empty!',
+        'success'
+      );
+      
+      setTimeout(() => {
+        window.location.reload();
+      }, 1200);
+    }
+  };
+
+  const handleAddTransaction = (newTx: Omit<Transaction, 'id'>) => {
+    const tx: Transaction = {
+      cashierId: currentUser.id,
+      ...newTx,
+      id: `tx_${Date.now()}`
+    };
+
+    // Update transactions list
+    setTransactions(prev => [tx, ...prev]);
+
+    // AUTO STOCK-LEVEL ADJUSTMENT
+    setProducts(prev => prev.map(p => {
+      if (p.id === tx.productId) {
+        const adjustment = tx.type === 'IN' ? tx.quantity : -tx.quantity;
+        return {
+          ...p,
+          quantity: Math.max(0, p.quantity + adjustment) // Prevent negative stock unless forced
+        };
+      }
+      return p;
+    }));
+  };
+
+  const handleImportProducts = (importedProducts: Product[]) => {
+    // Merge or replace products. For desktop safety, we merge them, updating duplicates based on code/sku.
+    setProducts(prev => {
+      const merged = [...prev];
+      importedProducts.forEach(imp => {
+        const existingIdx = merged.findIndex(p => p.code === imp.code);
+        if (existingIdx > -1) {
+          merged[existingIdx] = { ...merged[existingIdx], ...imp, id: merged[existingIdx].id };
+        } else {
+          merged.unshift(imp);
+        }
+      });
+      return merged;
+    });
+  };
+
+  const handleAddChatMessage = (msg: ChatMessage) => {
+    setChatHistory(prev => [...prev, msg]);
+  };
+
+  const handleClearChatHistory = () => {
+    setChatHistory([]);
+  };
+
+  const handleToggleLanguage = () => {
+    setLanguage(prev => prev === 'ar' ? 'en' : 'ar');
+  };
+
+  const handleTriggerAiAudit = () => {
+    setActiveTab('ai');
+  };
+
+  if (isTrialExpired) {
+    return (
+      <LicensingLock
+        language={language}
+        deviceId={deviceId}
+        trialStart={trialStart}
+        onActivate={handleActivate}
+        onBypassDirectly={handleBypassDirectly}
+      />
+    );
+  }
+
+  if (!isLoggedIn) {
+    return (
+      <LoginScreen
+        language={language}
+        teamMembers={teamMembers}
+        onLogin={(user, updatedPassword) => {
+          if (updatedPassword) {
+            const updatedTeam = teamMembers.map(m => m.id === user.id ? { ...m, password: updatedPassword } : m);
+            setTeamMembers(updatedTeam);
+
+          }
+          setCurrentUser(user);
+          setIsLoggedIn(true);
+          localStorage.setItem('store_is_logged_in', 'true');
+        }}
+        onToggleLanguage={handleToggleLanguage}
+      />
+    );
+  }
+
+  return (
+    <div 
+      className="min-h-screen bg-[#f8fafc] flex flex-col md:flex-row font-sans text-slate-900 antialiased pb-16 md:pb-0"
+      dir={isRtl ? 'rtl' : 'ltr'}
+    >
+      {/* --- DESKTOP SIDEBAR --- */}
+      <aside className="hidden md:flex md:w-64 bg-[#0f172a] text-slate-300 flex-col border-r border-slate-800/80 shrink-0 no-print shadow-xl">
+        {/* Brand Header */}
+        <div className="p-5 flex items-center gap-3 border-b border-slate-800 bg-[#1e293b]">
+          {companyLogo ? (
+            <div className="w-10 h-10 rounded-lg bg-white overflow-hidden flex items-center justify-center shadow-lg shadow-indigo-500/10">
+              <img src={companyLogo} alt="Logo" className="w-full h-full object-contain p-1" />
+            </div>
+          ) : (
+            <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center font-bold text-lg text-white shadow-lg shadow-indigo-500/20">
+              {companyName ? companyName.slice(0, 1).toUpperCase() : (isRtl ? 'م' : 'M')}
+            </div>
+          )}
+          <div className="flex flex-col">
+            <span className="text-xs font-bold text-white tracking-wide leading-tight">
+              {companyName || t.appTitle}
+            </span>
+            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">
+              Professional v4.2
+            </span>
+          </div>
+        </div>
+
+        {/* Sidebar Nav Buttons */}
+        <nav className="flex-1 p-4 space-y-1.5 overflow-y-auto">
+          {/* Button 1: Dashboard */}
+          {hasTabAccess(currentUser.role, 'dashboard') && (
+            <button
+              id="nav-tab-dashboard"
+              onClick={() => setActiveTab('dashboard')}
+              className={`w-full flex items-center gap-3 p-3 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer ${
+                activeTab === 'dashboard' 
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10' 
+                  : 'hover:bg-slate-800 hover:text-white text-slate-400'
+              }`}
+            >
+              <LayoutDashboard className="w-4 h-4 shrink-0" />
+              <span className="flex-1 text-start">{t.dashboard}</span>
+            </button>
+          )}
+
+          {/* Button 2: Inventory */}
+          {hasTabAccess(currentUser.role, 'inventory') && (
+            <button
+              id="nav-tab-inventory"
+              onClick={() => setActiveTab('inventory')}
+              className={`w-full flex items-center gap-3 p-3 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer ${
+                activeTab === 'inventory' 
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10' 
+                  : 'hover:bg-slate-800 hover:text-white text-slate-400'
+              }`}
+            >
+              <Package className="w-4 h-4 shrink-0" />
+              <span className="flex-1 text-start">{t.inventory}</span>
+            </button>
+          )}
+
+          {/* Button 3: Transactions */}
+          {hasTabAccess(currentUser.role, 'transactions') && (
+            <button
+              id="nav-tab-transactions"
+              onClick={() => setActiveTab('transactions')}
+              className={`w-full flex items-center gap-3 p-3 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer ${
+                activeTab === 'transactions' 
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10' 
+                  : 'hover:bg-slate-800 hover:text-white text-slate-400'
+              }`}
+            >
+              <ArrowLeftRight className="w-4 h-4 shrink-0" />
+              <span className="flex-1 text-start">{t.transactions}</span>
+            </button>
+          )}
+
+          {/* Button 4: Suppliers */}
+          {hasTabAccess(currentUser.role, 'suppliers') && (
+            <button
+              id="nav-tab-suppliers"
+              onClick={() => setActiveTab('suppliers')}
+              className={`w-full flex items-center gap-3 p-3 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer ${
+                activeTab === 'suppliers' 
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10' 
+                  : 'hover:bg-slate-800 hover:text-white text-slate-400'
+              }`}
+            >
+              <Users className="w-4 h-4 shrink-0" />
+              <span className="flex-1 text-start">{t.suppliers}</span>
+            </button>
+          )}
+
+          {/* Button 4.1: Customers */}
+          {hasTabAccess(currentUser.role, 'customers') && (
+            <button
+              id="nav-tab-customers"
+              onClick={() => setActiveTab('customers')}
+              className={`w-full flex items-center gap-3 p-3 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer ${
+                activeTab === 'customers' 
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10' 
+                  : 'hover:bg-slate-800 hover:text-white text-slate-400'
+              }`}
+            >
+              <Users className="w-4 h-4 shrink-0 text-teal-400" />
+              <span className="flex-1 text-start">{t.customers}</span>
+              <span className="bg-teal-950/85 text-teal-400 text-[8px] px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider">NEW</span>
+            </button>
+          )}
+
+          {/* Independent Vouchers & Collections */}
+          {hasTabAccess(currentUser.role, 'erp') && (
+            <button
+              id="nav-tab-vouchers"
+              onClick={() => { setActiveTab('erp'); setErpSubTab('vouchers'); }}
+              className={`w-full flex items-center gap-3 p-3 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer ${
+                activeTab === 'erp' && erpSubTab === 'vouchers'
+                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/10'
+                  : 'hover:bg-slate-800 hover:text-white text-slate-400'
+              }`}
+            >
+              <Receipt className="w-4 h-4 shrink-0 text-emerald-400" />
+              <span className="flex-1 text-start">{language === 'ar' ? 'السندات والتحصيل' : 'Vouchers & Collections'}</span>
+            </button>
+          )}
+
+          {/* Button 4.2: Services & Maintenance */}
+          {hasTabAccess(currentUser.role, 'erp') && currentUser.role === 'admin' && (
+            <button
+              id="nav-tab-services"
+              onClick={() => { setActiveTab('erp'); setErpSubTab('services'); }}
+              className={`w-full flex items-center gap-3 p-3 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer ${
+                activeTab === 'erp' && erpSubTab === 'services'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10' 
+                  : 'hover:bg-slate-800 text-slate-400'
+              }`}
+            >
+              <Wrench className="w-4 h-4 shrink-0 text-teal-400" />
+              <span className="flex-1 text-start">{language === 'ar' ? 'الخدمات والصيانة' : 'Services & Operations'}</span>
+              <span className="bg-teal-950/85 text-teal-400 text-[8px] px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider">NEW</span>
+            </button>
+          )}
+
+          {/* Button 4.5: Financials & ERP Hub with Independent Sidebar Elements */}
+          {hasTabAccess(currentUser.role, 'erp') && (
+            <div className="space-y-1">
+              <button
+                id="nav-tab-erp"
+                onClick={() => { setActiveTab('erp'); }}
+                className={`w-full flex items-center gap-3 p-3 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer ${
+                  activeTab === 'erp' 
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10 font-extrabold' 
+                    : 'hover:bg-slate-800 hover:text-white text-slate-400'
+                }`}
+              >
+                <Briefcase className="w-4 h-4 shrink-0 text-indigo-400" />
+                <span className="flex-1 text-start">{language === 'ar' ? 'المالية ونقاط البيع' : 'Financials & POS'}</span>
+                <span className="bg-emerald-950/80 text-emerald-400 text-[8px] px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider">ERP</span>
+              </button>
+
+              {/* ERP Independent Sub-tabs (Sub-menu / Independent sidebar items) */}
+              <div className="pl-3 py-1 space-y-1 border-l border-slate-800/80 ml-2.5 mr-2.5 my-1.5">
+                {[
+                  { id: 'sales', labelAr: 'شاشة مبيعات الكاشير', labelEn: 'Checkout Sales POS', icon: ShoppingCart, color: 'text-rose-400' },
+                  { id: 'purchases', labelAr: 'المشتريات والتوريد', labelEn: 'Supply Purchases', icon: ShoppingBag, color: 'text-amber-400' },
+                  { id: 'treasury', labelAr: 'الخزينة والسيولة', labelEn: 'Treasury & Safe', icon: Coins, color: 'text-sky-400' },
+                  { id: 'returns', labelAr: 'مرتجع مبيعات ومشتريات', labelEn: 'Returns Manager', icon: Undo2, color: 'text-cyan-400' },
+                  { id: 'expenses', labelAr: 'المصاريف والبنود', labelEn: 'Expenses Overhead', icon: TrendingDown, color: 'text-orange-400' },
+                  { id: 'transfers', labelAr: 'تحويلات المخازن والفروع', labelEn: 'Stock Transfers', icon: Shuffle, color: 'text-pink-400' },
+                  { id: 'services', labelAr: 'الخدمات والصيانة', labelEn: 'Services & Operations', icon: SettingsIcon, color: 'text-teal-400' },
+                  { id: 'team', labelAr: 'فريق العمل والرواتب', labelEn: 'Team & Staff Wages', icon: Users, color: 'text-blue-400' },
+                  { id: 'partners', labelAr: 'حصص الشركاء والأرباح', labelEn: 'Shareholders & Partners', icon: Scale, color: 'text-indigo-400' },
+                  { id: 'devices', labelAr: 'طابعات الفواتير والأجهزة', labelEn: 'Receipt Printers ESC', icon: Printer, color: 'text-slate-400' },
+                  { id: 'quotations', labelAr: 'عروض الأسعار', labelEn: 'Quotations', icon: FileCheck2, color: 'text-blue-400' },
+                  { id: 'cloudSync', labelAr: 'المزامنة السحابية بـ Firebase', labelEn: 'Firebase Cloud Sync', icon: Cloud, color: 'text-violet-400' }
+                ].filter(sub => {
+                  if (currentUser.role === 'admin') return true;
+                  if (currentUser.role === 'cashier') {
+                    return ['sales', 'returns', 'treasury', 'quotations'].includes(sub.id);
+                  }
+                  if (currentUser.role === 'storekeeper') {
+                    return ['purchases', 'transfers', 'returns'].includes(sub.id);
+                  }
+                  return false;
+                }).map(sub => {
+                  const SubIcon = sub.icon;
+                  const isCurrent = activeTab === 'erp' && erpSubTab === sub.id;
+                  return (
+                    <button
+                      key={sub.id}
+                      onClick={() => { setActiveTab('erp'); setErpSubTab(sub.id as any); }}
+                      className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-[11px] font-bold transition-all duration-150 cursor-pointer ${
+                        isCurrent 
+                          ? 'bg-slate-800 text-white border-l-2 border-indigo-500 font-extrabold shadow-sm' 
+                          : 'text-slate-450 hover:bg-slate-800/50 hover:text-white'
+                      }`}
+                      title={language === 'ar' ? sub.labelAr : sub.labelEn}
+                    >
+                      <SubIcon className={`w-3.5 h-3.5 shrink-0 ${isCurrent ? 'text-indigo-400' : sub.color}`} />
+                      <span className="truncate text-start">{language === 'ar' ? sub.labelAr : sub.labelEn}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Button 4.6: Comprehensive Reports */}
+          {hasTabAccess(currentUser.role, 'reports') && currentUser.role === 'admin' && (
+            <button
+              id="nav-tab-reports"
+              onClick={() => setActiveTab('reports')}
+              className={`w-full flex items-center gap-3 p-3 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer ${
+                activeTab === 'reports' 
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10' 
+                  : 'hover:bg-slate-800 hover:text-white text-slate-400'
+              }`}
+            >
+              <FileBarChart className="w-4 h-4 shrink-0 text-amber-400" />
+              <span className="flex-1 text-start">{language === 'ar' ? 'التقارير والربط المحاسبي' : 'Detailed Reports & Accounting'}</span>
+              <span className="bg-amber-950/80 text-amber-400 text-[8px] px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider">REPORTS</span>
+            </button>
+          )}
+
+          {/* Button 5: AI Advisor */}
+          {hasTabAccess(currentUser.role, 'ai') && (
+            <button
+              id="nav-tab-ai"
+              onClick={() => setActiveTab('ai')}
+              className={`w-full flex items-center gap-3 p-3 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer ${
+                activeTab === 'ai' 
+                  ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-md shadow-indigo-600/15' 
+                  : 'hover:bg-slate-800 hover:text-indigo-400 text-slate-400'
+              }`}
+            >
+              <BrainCircuit className="w-4 h-4 shrink-0" />
+              <span className="flex-1 text-start">{t.aiAdvisor}</span>
+              <span className="bg-indigo-900/80 text-indigo-200 text-[8px] px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider">AI</span>
+            </button>
+          )}
+
+          {/* Button 6: Settings */}
+          {hasTabAccess(currentUser.role, 'settings') && (
+            <button
+              id="nav-tab-settings"
+              onClick={() => setActiveTab('settings')}
+              className={`w-full flex items-center gap-3 p-3 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer ${
+                activeTab === 'settings' 
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10' 
+                  : 'hover:bg-slate-800 hover:text-white text-slate-400'
+              }`}
+            >
+              <SettingsIcon className="w-4 h-4 shrink-0" />
+              <span className="flex-1 text-start">{language === 'ar' ? 'إعدادات المنشأة والبيانات' : 'General Settings & Data'}</span>
+              <span className="bg-indigo-950 text-indigo-400 text-[8px] px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider">CONFIG</span>
+            </button>
+          )}
+
+          {/* Backup & Restore controls for desktop */}
+          <div className="pt-4 mt-4 border-t border-slate-800/85 space-y-2">
+            <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider block">
+              {t.importExport}
+            </span>
+            <button
+              onClick={handleBackupDatabase}
+              className="w-full flex items-center gap-2.5 bg-slate-900 hover:bg-slate-850 px-3 py-2 rounded-lg text-[10px] font-bold border border-slate-800/80 text-slate-300 transition cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5 text-indigo-400" />
+              {t.backupDatabase}
+            </button>
+            <label className="w-full flex items-center gap-2.5 bg-slate-900 hover:bg-slate-850 px-3 py-2 rounded-lg text-[10px] font-bold border border-slate-800/80 text-slate-300 transition cursor-pointer">
+              <Upload className="w-3.5 h-3.5 text-emerald-400" />
+              {t.restoreDatabase}
+              <input 
+                type="file" 
+                accept=".json" 
+                onChange={handleRestoreDatabase} 
+                className="hidden" 
+              />
+            </label>
+            <button
+              onClick={handleClearAllData}
+              className="w-full flex items-center gap-2.5 bg-red-950/40 hover:bg-red-900/40 px-3 py-2 rounded-lg text-[10px] font-bold border border-red-900/50 text-red-400 transition cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-red-500" />
+              {language === 'ar' ? 'تفريغ البيانات وتصفير النظام' : 'Clear & Reset All Data'}
+            </button>
+          </div>
+        </nav>
+
+        {/* Sidebar Footer Controls */}
+        <div className="p-4 border-t border-slate-800/80 space-y-3 bg-[#020617] text-[11px]">
+          {/* Activation & License status Badge */}
+          <SidebarActivationBadge
+            language={language}
+            deviceId={deviceId}
+            trialStart={trialStart}
+            isLicensed={isLicensed}
+            onActivate={handleActivate}
+          />
+
+          {/* Language Switcher */}
+          <button
+            id="btn-lang-toggle"
+            onClick={handleToggleLanguage}
+            className="w-full flex items-center justify-between bg-slate-900 hover:bg-slate-850 px-3 py-2 rounded-lg text-slate-300 font-semibold border border-slate-800/60 transition cursor-pointer"
+          >
+            <span className="flex items-center gap-2">
+              <Languages className="w-4 h-4 text-slate-400" />
+              {t.langToggle}
+            </span>
+            <span className="text-[10px] text-slate-500 font-mono">[{language.toUpperCase()}]</span>
+          </button>
+
+          {/* Offline local save indicator with Dynamic System Operator badge */}
+          <button
+            onClick={() => {
+              setIsLoggedIn(false);
+              localStorage.removeItem('store_is_logged_in');
+            }}
+            className="w-full pt-2 border-t border-slate-800/60 flex items-center justify-between hover:bg-slate-900 p-1.5 rounded-lg transition cursor-pointer text-start outline-none"
+            title={language === 'ar' ? 'تسجيل الخروج والعودة لشاشة الدخول' : 'Logout and return to login screen'}
+          >
+            <div className="flex items-center gap-2.5 overflow-hidden">
+              <div className="w-8 h-8 rounded-full bg-indigo-600 border border-indigo-500 flex items-center justify-center text-[10px] font-bold text-white uppercase shrink-0">
+                {currentUser.name.slice(0, 2)}
+              </div>
+              <div className="flex flex-col overflow-hidden text-slate-300">
+                <span className="text-[10px] font-bold truncate">{String(currentUser?.name ?? '').split('|')[0].trim()}</span>
+                <span className="text-[9px] text-slate-500 leading-none mt-0.5">
+                  {currentUser.role === 'admin' && (language === 'ar' ? 'مدير النظام' : 'System Admin')}
+                  {currentUser.role === 'cashier' && (language === 'ar' ? 'كاشير مبيعات' : 'Sales Cashier')}
+                  {currentUser.role === 'storekeeper' && (language === 'ar' ? 'أمين مستودع' : 'Storekeeper')}
+                </span>
+              </div>
+            </div>
+            <span className="text-[9px] text-rose-400 font-bold border border-rose-500/30 px-1.5 py-0.5 rounded bg-rose-500/10 shrink-0">
+              {language === 'ar' ? 'خروج' : 'Exit'}
+            </span>
+          </button>
+        </div>
+      </aside>
+
+      {/* --- MOBILE NAV OVERLAY DRAWER --- */}
+      {isMobileMenuOpen && (
+        <div 
+          className="fixed inset-0 bg-slate-950/75 z-50 flex backdrop-blur-xs md:hidden animate-in fade-in duration-200"
+          onClick={() => setIsMobileMenuOpen(false)}
+        >
+          <div 
+            className={`bg-[#0f172a] w-72 h-full p-5 flex flex-col text-slate-300 relative shadow-2xl animate-in duration-300 ${
+              isRtl ? 'slide-in-from-right mr-auto' : 'slide-in-from-left ml-auto'
+            }`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close Button */}
+            <button 
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {/* Brand Logo */}
+            <div className="flex items-center gap-3 border-b border-slate-800/80 pb-5 pt-2">
+              {companyLogo ? (
+                <div className="w-10 h-10 rounded-lg bg-white overflow-hidden flex items-center justify-center shadow-lg">
+                  <img src={companyLogo} alt="Logo" className="w-full h-full object-contain p-1" />
+                </div>
+              ) : (
+                <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center font-bold text-lg text-white shadow-lg">
+                  {companyName ? companyName.slice(0, 1).toUpperCase() : (isRtl ? 'م' : 'M')}
+                </div>
+              )}
+              <div className="flex flex-col">
+                <span className="text-xs font-bold text-white tracking-wide leading-tight">
+                  {companyName || t.appTitle}
+                </span>
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">
+                  Mobile Pro v4.2
+                </span>
+              </div>
+            </div>
+
+            {/* Drawer Links */}
+            <nav className="py-5 space-y-1.5 border-b border-slate-800/50 flex-1 overflow-y-auto">
+              <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block mb-1">
+                {language === 'ar' ? 'أقسام النظام' : 'SYSTEM DEPARTMENTS'}
+              </span>
+              {hasTabAccess(currentUser.role, 'dashboard') && (
+                <button
+                  onClick={() => { setActiveTab('dashboard'); setIsMobileMenuOpen(false); }}
+                  className={`w-full flex items-center gap-3 p-2.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                    activeTab === 'dashboard' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <LayoutDashboard className="w-4.5 h-4.5" />
+                  <span>{t.dashboard}</span>
+                </button>
+              )}
+              {hasTabAccess(currentUser.role, 'inventory') && (
+                <button
+                  onClick={() => { setActiveTab('inventory'); setIsMobileMenuOpen(false); }}
+                  className={`w-full flex items-center gap-3 p-2.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                    activeTab === 'inventory' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <Package className="w-4.5 h-4.5" />
+                  <span>{t.inventory}</span>
+                </button>
+              )}
+              {hasTabAccess(currentUser.role, 'transactions') && (
+                <button
+                  onClick={() => { setActiveTab('transactions'); setIsMobileMenuOpen(false); }}
+                  className={`w-full flex items-center gap-3 p-2.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                    activeTab === 'transactions' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <ArrowLeftRight className="w-4.5 h-4.5" />
+                  <span>{t.transactions}</span>
+                </button>
+              )}
+              {hasTabAccess(currentUser.role, 'suppliers') && (
+                <button
+                  onClick={() => { setActiveTab('suppliers'); setIsMobileMenuOpen(false); }}
+                  className={`w-full flex items-center gap-3 p-2.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                    activeTab === 'suppliers' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <Users className="w-4.5 h-4.5" />
+                  <span>{t.suppliers}</span>
+                </button>
+              )}
+              {hasTabAccess(currentUser.role, 'customers') && (
+                <button
+                  onClick={() => { setActiveTab('customers'); setIsMobileMenuOpen(false); }}
+                  className={`w-full flex items-center gap-3 p-2.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                    activeTab === 'customers' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <Users className="w-4.5 h-4.5 text-teal-400" />
+                  <span>{t.customers}</span>
+                </button>
+              )}
+              {hasTabAccess(currentUser.role, 'erp') && (
+                <button
+                  onClick={() => { setActiveTab('erp'); setErpSubTab('vouchers'); setIsMobileMenuOpen(false); }}
+                  className={`w-full flex items-center gap-3 p-2.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                    activeTab === 'erp' && erpSubTab === 'vouchers' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <Receipt className="w-4.5 h-4.5 text-emerald-400" />
+                  <span>{language === 'ar' ? 'السندات والتحصيل' : 'Vouchers & Collections'}</span>
+                </button>
+              )}
+              {hasTabAccess(currentUser.role, 'erp') && (
+                <div className="space-y-1">
+                  <button
+                    onClick={() => { setActiveTab('erp'); setIsMobileMenuOpen(false); }}
+                    className={`w-full flex items-center gap-3 p-2.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                      activeTab === 'erp' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                    }`}
+                  >
+                    <Briefcase className="w-4.5 h-4.5 text-indigo-400" />
+                    <span>{language === 'ar' ? 'المالية ونقاط البيع' : 'Financials & POS'}</span>
+                  </button>
+                  <div className="pl-3 py-1.5 space-y-1 border-l border-slate-800 ml-2.5 mr-2.5 my-1">
+                    {[
+                      { id: 'sales', labelAr: 'شاشة مبيعات الكاشير', labelEn: 'Checkout Sales POS', icon: ShoppingCart, color: 'text-rose-400' },
+                      { id: 'purchases', labelAr: 'المشتريات والتوريد', labelEn: 'Supply Purchases', icon: ShoppingBag, color: 'text-amber-400' },
+                      { id: 'treasury', labelAr: 'الخزينة والسيولة', labelEn: 'Treasury & Safe', icon: Coins, color: 'text-sky-400' },
+                      { id: 'returns', labelAr: 'مرتجع مبيعات ومشتريات', labelEn: 'Returns Manager', icon: Undo2, color: 'text-cyan-400' },
+                      { id: 'expenses', labelAr: 'المصاريف والبنود', labelEn: 'Expenses Overhead', icon: TrendingDown, color: 'text-orange-400' },
+                      { id: 'transfers', labelAr: 'تحويلات المخازن والفروع', labelEn: 'Stock Transfers', icon: Shuffle, color: 'text-pink-400' },
+                      { id: 'team', labelAr: 'فريق العمل والرواتب', labelEn: 'Team & Staff Wages', icon: Users, color: 'text-blue-400' },
+                      { id: 'partners', labelAr: 'حصص الشركاء والأرباح', labelEn: 'Shareholders & Partners', icon: Scale, color: 'text-indigo-400' },
+                      { id: 'devices', labelAr: 'طابعات الفواتير والأجهزة', labelEn: 'Receipt Printers ESC', icon: Printer, color: 'text-slate-400' },
+                      { id: 'quotations', labelAr: 'عروض الأسعار', labelEn: 'Quotations', icon: FileCheck2, color: 'text-blue-400' },
+                  { id: 'cloudSync', labelAr: 'المزامنة السحابية بـ Firebase', labelEn: 'Firebase Cloud Sync', icon: Cloud, color: 'text-violet-400' }
+                    ].filter(sub => {
+                      if (currentUser.role === 'admin') return true;
+                      if (currentUser.role === 'cashier') {
+                        return ['sales', 'returns', 'treasury', 'quotations'].includes(sub.id);
+                      }
+                      if (currentUser.role === 'storekeeper') {
+                        return ['purchases', 'transfers', 'returns'].includes(sub.id);
+                      }
+                      return false;
+                    }).map(sub => {
+                      const SubIcon = sub.icon;
+                      const isCurrent = activeTab === 'erp' && erpSubTab === sub.id;
+                      return (
+                        <button
+                          key={sub.id}
+                          onClick={() => { setActiveTab('erp'); setErpSubTab(sub.id as any); setIsMobileMenuOpen(false); }}
+                          className={`w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md text-[10px] font-bold transition cursor-pointer ${
+                            isCurrent 
+                              ? 'bg-slate-800 text-white font-extrabold' 
+                              : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                          }`}
+                        >
+                          <SubIcon className={`w-3 h-3 shrink-0 ${isCurrent ? 'text-indigo-400' : sub.color}`} />
+                          <span className="truncate text-start">{language === 'ar' ? sub.labelAr : sub.labelEn}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {hasTabAccess(currentUser.role, 'ai') && (
+                <button
+                  onClick={() => { setActiveTab('ai'); setIsMobileMenuOpen(false); }}
+                  className={`w-full flex items-center gap-3 p-2.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                    activeTab === 'ai' ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <BrainCircuit className="w-4.5 h-4.5" />
+                  <span>{t.aiAdvisor}</span>
+                </button>
+              )}
+
+              {hasTabAccess(currentUser.role, 'settings') && (
+                <button
+                  onClick={() => { setActiveTab('settings'); setIsMobileMenuOpen(false); }}
+                  className={`w-full flex items-center gap-3 p-2.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                    activeTab === 'settings' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <SettingsIcon className="w-4.5 h-4.5 text-indigo-400" />
+                  <span>{language === 'ar' ? 'الإعدادات العامة' : 'General Settings'}</span>
+                </button>
+              )}
+
+              {/* Mobile Backup Tools */}
+              <div className="pt-5 mt-5 border-t border-slate-800/80 space-y-2.5">
+                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">
+                  {t.importExport}
+                </span>
+                <button
+                  onClick={handleBackupDatabase}
+                  className="w-full flex items-center gap-2.5 bg-slate-900 hover:bg-slate-850 px-3.5 py-2.5 rounded-xl text-xs font-bold border border-slate-800 text-slate-200 transition cursor-pointer"
+                >
+                  <Download className="w-4 h-4 text-indigo-400" />
+                  {t.backupDatabase}
+                </button>
+                <label className="w-full flex items-center gap-2.5 bg-slate-900 hover:bg-slate-850 px-3.5 py-2.5 rounded-xl text-xs font-bold border border-slate-800 text-slate-200 transition cursor-pointer">
+                  <Upload className="w-4 h-4 text-emerald-400" />
+                  {t.restoreDatabase}
+                  <input 
+                    type="file" 
+                    accept=".json" 
+                    onChange={handleRestoreDatabase} 
+                    className="hidden" 
+                  />
+                </label>
+                <button
+                  onClick={handleClearAllData}
+                  className="w-full flex items-center gap-2.5 bg-red-950/40 hover:bg-red-900/40 px-3.5 py-2.5 rounded-xl text-xs font-bold border border-red-900/50 text-red-400 transition cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4 text-red-500" />
+                  {language === 'ar' ? 'تفريغ البيانات وتصفير النظام' : 'Clear & Reset All Data'}
+                </button>
+              </div>
+            </nav>
+
+            {/* Mobile drawer footer switcher */}
+            <div className="pt-4 border-t border-slate-800/60 space-y-3.5 text-[11px]">
+              <button
+                onClick={() => {
+                  handleToggleLanguage();
+                  setIsMobileMenuOpen(false);
+                }}
+                className="w-full flex items-center justify-between bg-slate-900 hover:bg-slate-850 px-3.5 py-2 rounded-lg text-slate-250 font-bold border border-slate-800 cursor-pointer"
+              >
+                <span className="flex items-center gap-2">
+                  <Languages className="w-4 h-4 text-slate-400" />
+                  {t.langToggle}
+                </span>
+                <span className="text-[10px] text-slate-500 font-mono">[{language.toUpperCase()}]</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setIsMobileMenuOpen(false);
+                  setIsLoggedIn(false);
+                  localStorage.removeItem('store_is_logged_in');
+                }}
+                className="w-full flex items-center justify-between hover:bg-slate-900 p-2 rounded-xl border border-slate-800 cursor-pointer text-start outline-none"
+              >
+                <div className="flex items-center gap-3 overflow-hidden">
+                  <div className="w-8 h-8 rounded-full bg-indigo-600 border border-indigo-500 flex items-center justify-center text-[10px] font-bold text-white uppercase shrink-0">
+                    {currentUser.name.slice(0, 2)}
+                  </div>
+                  <div className="flex flex-col overflow-hidden text-slate-300">
+                    <span className="text-[10px] font-bold truncate">{String(currentUser?.name ?? '').split('|')[0].trim()}</span>
+                    <span className="text-[9px] text-slate-500 leading-none mt-0.5">
+                      {currentUser.role === 'admin' && (language === 'ar' ? 'مدير النظام' : 'System Admin')}
+                      {currentUser.role === 'cashier' && (language === 'ar' ? 'كاشير مبيعات' : 'Sales Cashier')}
+                      {currentUser.role === 'storekeeper' && (language === 'ar' ? 'أمين مستودع' : 'Storekeeper')}
+                    </span>
+                  </div>
+                </div>
+                <span className="text-[9px] text-rose-400 font-bold px-2 py-1 rounded bg-rose-500/10 border border-rose-500/25">
+                  {language === 'ar' ? 'خروج' : 'Exit'}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- MAIN WORKSPACE --- */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Top Header (Bilingual & Responsive with Hamburger and Scan icon) */}
+        <header className="h-16 bg-white border-b border-slate-200 px-4 sm:px-8 flex items-center justify-between shadow-xs z-10 no-print">
+          <div className="flex items-center gap-3">
+            {/* Mobile Hamburger menu */}
+            <button 
+              onClick={() => setIsMobileMenuOpen(true)}
+              className="md:hidden p-2 hover:bg-slate-100 rounded-xl text-slate-600 active:scale-95 transition cursor-pointer"
+              title="Menu"
+            >
+              <Menu className="w-5.5 h-5.5" />
+            </button>
+
+            <h2 className="text-sm sm:text-base font-black text-slate-850 capitalize tracking-tight font-sans">
+              {activeTab === 'dashboard' && t.dashboard}
+              {activeTab === 'inventory' && t.inventory}
+              {activeTab === 'transactions' && t.transactions}
+              {activeTab === 'suppliers' && t.suppliers}
+              {activeTab === 'ai' && t.aiAdvisor}
+            </h2>
+          </div>
+
+          {/* Quick Scanner Shortcut & Clock Indicators */}
+          <div className="flex items-center gap-2 sm:gap-4 text-xs font-mono font-semibold text-slate-500">
+            {/* Quick Scanner Camera Button on top header (perfect for rapid handheld workflow) */}
+            <button
+              onClick={() => setIsScannerOpen(true)}
+              className="flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border border-indigo-200/60 px-3 py-1.5 rounded-xl font-bold font-sans text-xs active:scale-95 transition cursor-pointer"
+              title={language === 'ar' ? 'مسح سريع للباركود' : 'Quick scan barcode'}
+            >
+              <Camera className="w-4 h-4 text-indigo-500" />
+              <span className="hidden sm:inline">{language === 'ar' ? 'مسح سريع' : 'Quick Scan'}</span>
+            </button>
+
+            {/* Real-time Cloud Sync Pulse Badge */}
+            <div 
+              onClick={() => {
+                setActiveTab('erp');
+                setErpSubTab('cloudSync');
+              }}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border transition cursor-pointer text-xs font-sans font-semibold ${
+                isAutoSyncEnabled 
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100' 
+                  : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'
+              }`}
+              title={
+                language === 'ar' 
+                  ? (isAutoSyncEnabled ? 'المزامنة التلقائية الفورية نشطة' : 'المزامنة التلقائية متوقفة') 
+                  : (isAutoSyncEnabled ? 'Instant Auto Sync is Active' : 'Auto Sync is Inactive')
+              }
+            >
+              <span className={`relative flex h-2 w-2 ${isAutoSyncEnabled ? 'block' : 'hidden'}`}>
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              <Cloud className={`w-4 h-4 ${isAutoSyncEnabled ? 'text-emerald-500 animate-pulse' : 'text-slate-400'}`} />
+              <span className="hidden lg:inline">
+                {language === 'ar' 
+                  ? (isAutoSyncEnabled ? 'سحابي نشط' : 'سحابي غير متصل') 
+                  : (isAutoSyncEnabled ? 'Cloud Sync Active' : 'Cloud Offline')}
+              </span>
+            </div>
+
+            {/* Live Sync Notifications Center */}
+            <div className="relative">
+              <button
+                onClick={() => setIsNotificationOpen(!isNotificationOpen)}
+                className={`relative flex items-center justify-center p-2 rounded-xl border transition cursor-pointer ${
+                  isNotificationOpen
+                    ? 'bg-indigo-50 border-indigo-300 text-indigo-700 ring-2 ring-indigo-250'
+                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+                title={language === 'ar' ? 'تنبيهات المزامنة الفورية' : 'Instant Sync Alerts'}
+              >
+                <Bell className={`w-4.5 h-4.5 ${liveNotifications.length > 0 ? 'animate-bounce' : ''}`} />
+                {liveNotifications.length > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 flex h-4.5 w-4.5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white shadow-sm ring-1 ring-white">
+                    {liveNotifications.length}
+                  </span>
+                )}
+              </button>
+
+              {isNotificationOpen && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setIsNotificationOpen(false)}></div>
+                  <div className={`absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-xl border border-slate-200 p-3 z-40 animate-in fade-in slide-in-from-top-2 duration-150 ${language === 'ar' ? 'text-right' : 'text-left'}`}>
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-2">
+                      <span className="text-[11px] text-slate-500 font-extrabold uppercase tracking-wider block">
+                        {language === 'ar' ? 'أحدث تنبيهات المزامنة الفورية' : 'Live Sync Feed'}
+                      </span>
+                      {liveNotifications.length > 0 && (
+                        <button
+                          onClick={() => setLiveNotifications([])}
+                          className="text-[10px] text-red-500 hover:text-red-700 font-bold active:scale-95 transition cursor-pointer"
+                        >
+                          {language === 'ar' ? 'مسح الكل' : 'Clear All'}
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="max-h-60 overflow-y-auto space-y-2 pr-1 scrollbar-thin">
+                      {liveNotifications.length === 0 ? (
+                        <div className="py-6 text-center text-xs text-slate-400">
+                          {language === 'ar' ? 'لا توجد تنبيهات مزامنة جديدة حالياً' : 'No sync notifications yet.'}
+                        </div>
+                      ) : (
+                        liveNotifications.map((n) => {
+                          const isLowStock = (n as any).type === 'low_stock';
+                          return (
+                            <div 
+                              key={n.id} 
+                              onClick={() => {
+                                if (isLowStock && (n as any).productId) {
+                                  setNotificationSelectedProductId((n as any).productId);
+                                  setActiveTab('inventory');
+                                  setIsNotificationOpen(false);
+                                }
+                              }}
+                              className={`text-xs p-2 rounded-lg border flex flex-col gap-1 transition ${
+                                isLowStock 
+                                  ? 'bg-amber-50/80 border-amber-250 hover:bg-amber-100/70 cursor-pointer text-amber-900 shadow-3xs' 
+                                  : 'bg-slate-50 border-slate-100 hover:bg-indigo-25/40'
+                              }`}
+                            >
+                              <span className="font-semibold leading-relaxed block">{n.message}</span>
+                              <span className="text-[9px] text-slate-400 font-mono font-bold">
+                                {new Date(n.timestamp).toLocaleTimeString(language === 'ar' ? 'ar-EG' : 'en-US', {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                  second: '2-digit'
+                                })}
+                              </span>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Live Clock */}
+            <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-200/60 shadow-3xs">
+              <Clock className="w-3.5 h-3.5 text-indigo-500" />
+              <span className="text-slate-750 font-bold">
+                {currentTime.toLocaleTimeString(language === 'ar' ? 'ar-EG' : 'en-US', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  second: '2-digit'
+                })}
+              </span>
+            </div>
+
+            {/* Active User Badge with High-Speed Session Switcher */}
+            <div className="relative">
+              <button
+                onClick={() => setIsUserSwitcherOpen(!isUserSwitcherOpen)}
+                className={`flex items-center gap-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border ${isUserSwitcherOpen ? 'border-indigo-500 ring-2 ring-indigo-250' : 'border-indigo-200'} px-2.5 py-1.5 rounded-xl font-bold font-sans text-xs transition cursor-pointer`}
+                title={language === 'ar' ? 'تبديل المستخدم السريع الفوري بنقرة واحدة' : 'Instant 1-click user session switcher'}
+              >
+                <div className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-[9px]">
+                  {currentUser.name.slice(0, 1)}
+                </div>
+                <span className="hidden sm:inline truncate max-w-[100px]">{String(currentUser?.name ?? '').split('|')[0].trim()}</span>
+                <span className="bg-indigo-100 text-indigo-800 text-[8px] px-1.5 py-0.5 rounded uppercase">
+                  {currentUser.role === 'admin' && (language === 'ar' ? 'مدير' : 'Admin')}
+                  {currentUser.role === 'cashier' && (language === 'ar' ? 'كاشير' : 'POS')}
+                  {currentUser.role === 'storekeeper' && (language === 'ar' ? 'جرد' : 'Stock')}
+                </span>
+              </button>
+
+              {isUserSwitcherOpen && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setIsUserSwitcherOpen(false)}></div>
+                  <div className="absolute right-0 mt-2 w-64 bg-white rounded-2xl shadow-xl border border-slate-200 p-2 z-40 animate-in fade-in slide-in-from-top-2 duration-150">
+                    <div className="px-3 py-1.5 border-b border-slate-100 mb-1">
+                      <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wider block">
+                        {language === 'ar' ? 'التبديل السريع للموظفين' : 'Instant Profile Switch'}
+                      </span>
+                    </div>
+                    <div className="space-y-1">
+                      {teamMembers.filter(m => m.active).map(m => {
+                        const isCurrent = m.id === currentUser.id;
+                        return (
+                          <button
+                            key={m.id}
+                            onClick={() => {
+                              setCurrentUser(m);
+                              setIsUserSwitcherOpen(false);
+                              showToast(
+                                language === 'ar' 
+                                  ? `✅ تم تبديل الكاشير والمستخدم النشط إلى: ${String(m?.name ?? '').split('|')[0].trim()}` 
+                                  : `✅ Active operator switched to: ${String(m?.name ?? '').split('|')[0].trim()}`,
+                                'success'
+                              );
+                            }}
+                            className={`w-full text-left flex items-center justify-between p-2 rounded-xl transition cursor-pointer ${
+                              isCurrent 
+                                ? 'bg-indigo-50 text-indigo-800 font-extrabold' 
+                                : 'hover:bg-slate-50 text-slate-700 hover:text-slate-900'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 overflow-hidden">
+                              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[8px] font-bold text-white uppercase ${isCurrent ? 'bg-indigo-600' : 'bg-slate-400'}`}>
+                                {m.name.slice(0, 1)}
+                              </div>
+                              <span className="text-[11px] truncate">{String(m?.name ?? '').split('|')[0].trim()}</span>
+                            </div>
+                            <span className={`text-[8px] px-1.5 py-0.5 rounded font-mono uppercase font-black ${
+                              m.role === 'admin' ? 'bg-red-50 text-red-700 border border-red-200' :
+                              m.role === 'cashier' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'
+                            }`}>
+                              {m.role === 'admin' && (language === 'ar' ? 'مدير' : 'Admin')}
+                              {m.role === 'cashier' && (language === 'ar' ? 'كاشير' : 'POS')}
+                              {m.role === 'storekeeper' && (language === 'ar' ? 'جرد' : 'Stock')}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="border-t border-slate-100 mt-1.5 pt-1.5">
+                      <button
+                        onClick={() => {
+                          setIsUserSwitcherOpen(false);
+                          setIsLoggedIn(false);
+                          localStorage.removeItem('store_is_logged_in');
+                        }}
+                        className="w-full text-center py-2 px-3 text-[10px] font-extrabold text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-xl transition cursor-pointer border border-rose-200/50 block"
+                      >
+                        {language === 'ar' ? 'تسجيل خروج كامل شاشة القفل 🔒' : 'Full Secure Logout 🔒'}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Local Date */}
+            <div className="hidden lg:block bg-slate-50/50 border border-slate-200/40 px-2.5 py-1.5 rounded-lg text-slate-650">
+              {currentTime.toLocaleDateString(language === 'ar' ? 'ar-EG' : 'en-US', {
+                weekday: 'short',
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric'
+              })}
+            </div>
+          </div>
+        </header>
+
+        {/* Content Viewport */}
+        <main className="flex-1 p-3 sm:p-4 md:p-6 overflow-y-auto">
+          {activeTab === 'dashboard' && (
+            <Dashboard 
+              products={products}
+              transactions={transactions}
+              categories={categories}
+              suppliers={suppliers}
+              customers={customers}
+              warehouses={warehouses}
+              language={language}
+              onNavigate={(tab) => setActiveTab(tab)}
+              onTriggerAiAudit={handleTriggerAiAudit}
+              onNavigateSubTab={(tab, subTab) => {
+                setActiveTab(tab);
+                setErpSubTab(subTab);
+              }}
+              onAddProduct={handleAddProduct}
+              onAddCategory={handleAddCategory}
+              onAddSupplier={handleAddSupplier}
+              onAddCustomer={handleAddCustomer}
+              onAddWarehouse={handleAddWarehouse}
+              onResetAllData={() => {
+                setProducts([]);
+                setCategories([]);
+                setSuppliers([]);
+                setCustomers([]);
+                setWarehouses([]);
+                setTransactions([]);
+                setTransfers([]);
+                setExpenses([]);
+                setPartners([]);
+                showToast(
+                  language === 'ar' 
+                    ? 'تم تصفير النظام بنجاح ومسح جميع البيانات ليبدأ العمل من الصفر!' 
+                    : 'System database successfully wiped, ready for fresh configuration!', 
+                  'success'
+                );
+              }}
+              setProducts={setProducts}
+              setTransactions={setTransactions}
+              setSuppliers={setSuppliers}
+              expenses={expenses}
+              showToast={showToast}
+            />
+          )}
+
+          {activeTab === 'inventory' && (
+            <Inventory 
+              products={products}
+              categories={categories}
+              suppliers={suppliers}
+              warehouses={warehouses}
+              setWarehouses={setWarehouses}
+              language={language}
+              onAddProduct={handleAddProduct}
+              onUpdateProduct={handleUpdateProduct}
+              onDeleteProduct={handleDeleteProduct}
+              onAddCategory={handleAddCategory}
+              onImportProducts={handleImportProducts}
+              showToast={showToast}
+              selectedProductIdFromNotification={notificationSelectedProductId}
+              onClearNotificationProductId={() => setNotificationSelectedProductId(null)}
+            />
+          )}
+
+          {activeTab === 'transactions' && (
+            <Transactions 
+              products={products}
+              transactions={transactions}
+              language={language}
+              onAddTransaction={handleAddTransaction}
+              onDeleteTransaction={handleDeleteTransaction}
+              currencySymbol={currencySymbol}
+            />
+          )}
+
+          {activeTab === 'suppliers' && (
+            <Suppliers 
+              suppliers={suppliers}
+              products={products}
+              language={language}
+              onAddSupplier={handleAddSupplier}
+              onUpdateSupplier={handleUpdateSupplier}
+              onDeleteSupplier={handleDeleteSupplier}
+              customers={customers}
+              currencySymbol={currencySymbol}
+              onOpenSupplier={(supplier) => {
+                setProfileOpenRequest({ type: 'supplier', id: supplier.id, token: Date.now() });
+                setErpSubTab('customers');
+                setActiveTab('erp');
+              }}
+            />
+          )}
+
+          {activeTab === 'customers' && (
+            <Customers 
+              customers={customers}
+              transactions={transactions}
+              products={products}
+              language={language}
+              onAddCustomer={handleAddCustomer}
+              onUpdateCustomer={handleUpdateCustomer}
+              onDeleteCustomer={handleDeleteCustomer}
+              suppliers={suppliers}
+              currencySymbol={currencySymbol}
+              onOpenCustomer={(customer) => {
+                setProfileOpenRequest({ type: 'customer', id: customer.id, token: Date.now() });
+                setErpSubTab('customers');
+                setActiveTab('erp');
+              }}
+            />
+          )}
+
+          <div className={activeTab === 'erp' ? "flex flex-col flex-1" : "hidden"}>
+            <ErpHub
+              products={products}
+              categories={categories}
+              suppliers={suppliers}
+              transactions={transactions}
+              customers={customers}
+              warehouses={warehouses}
+              transfers={transfers}
+              expenses={expenses}
+              teamMembers={teamMembers}
+              partners={partners}
+              distributions={distributions}
+              services={services}
+              language={language}
+              currencySymbol={currencySymbol}
+              setProducts={setProducts}
+              setTransactions={setTransactions}
+              setCustomers={setCustomers}
+              setSuppliers={setSuppliers}
+              setTransfers={setTransfers}
+              setExpenses={setExpenses}
+              setTeamMembers={setTeamMembers}
+              setPartners={setPartners}
+              setDistributions={setDistributions}
+              setWarehouses={setWarehouses}
+              setServices={setServices}
+              vouchers={vouchers}
+              setVouchers={setVouchers}
+              invoices={invoices}
+              setInvoices={setInvoices}
+              chatHistory={chatHistory}
+              setChatHistory={setChatHistory}
+              setCategories={setCategories}
+              showToast={showToast}
+              currentUser={currentUser}
+              setCurrentUser={setCurrentUser}
+              activeSubTab={erpSubTab}
+              setActiveSubTab={setErpSubTab}
+              profileOpenRequest={profileOpenRequest}
+              companyName={companyName}
+              companyAddress={companyAddress}
+              companyPhone={companyPhone}
+              companyLogo={companyLogo}
+              setCompanyName={setCompanyName}
+              setCompanyAddress={setCompanyAddress}
+              setCompanyPhone={setCompanyPhone}
+              setCompanyLogo={setCompanyLogo}
+              firebaseUrl={firebaseUrl}
+              setFirebaseUrl={setFirebaseUrl}
+              teamId={teamId}
+              setTeamId={setTeamId}
+              cloudSyncType={cloudSyncType}
+              setCloudSyncType={setCloudSyncType}
+              isAutoSyncEnabled={isAutoSyncEnabled}
+              setIsAutoSyncEnabled={setIsAutoSyncEnabled}
+              isLiveMonitoringActive={isLiveMonitoringActive}
+              setIsLiveMonitoringActive={setIsLiveMonitoringActive}
+              liveNotifications={liveNotifications}
+              setLiveNotifications={setLiveNotifications}
+            />
+          </div>
+
+          {activeTab === 'ai' && (
+            <AiAdvisor 
+              products={products}
+              categories={categories}
+              suppliers={suppliers}
+              transactions={transactions}
+              language={language}
+              chatHistory={chatHistory}
+              onAddChatMessage={handleAddChatMessage}
+              onClearChatHistory={handleClearChatHistory}
+            />
+          )}
+
+          {activeTab === 'reports' && (
+            <Reports
+              products={products}
+              categories={categories}
+              suppliers={suppliers}
+              transactions={transactions}
+              customers={customers}
+              warehouses={warehouses}
+              expenses={expenses}
+              vouchers={vouchers}
+              invoices={invoices}
+              teamMembers={teamMembers}
+              language={language}
+              companyName={companyName}
+              currencySymbol={currencySymbol}
+              setProducts={setProducts}
+              setSuppliers={setSuppliers}
+              setTransactions={setTransactions}
+              setCustomers={setCustomers}
+              setWarehouses={setWarehouses}
+              setExpenses={setExpenses}
+              setVouchers={setVouchers}
+              setInvoices={setInvoices}
+            />
+          )}
+
+          {activeTab === 'settings' && (
+            <Settings
+              language={language}
+              companyName={companyName}
+              setCompanyName={setCompanyName}
+              companyAddress={companyAddress}
+              setCompanyAddress={setCompanyAddress}
+              companyPhone={companyPhone}
+              setCompanyPhone={setCompanyPhone}
+              companyLogo={companyLogo}
+              setCompanyLogo={setCompanyLogo}
+              currencySymbol={currencySymbol}
+              setCurrencySymbol={setCurrencySymbol}
+              products={products}
+              setProducts={setProducts}
+              categories={categories}
+              setCategories={setCategories}
+              suppliers={suppliers}
+              setSuppliers={setSuppliers}
+              transactions={transactions}
+              setTransactions={setTransactions}
+              chatHistory={chatHistory}
+              setChatHistory={setChatHistory}
+              customers={customers}
+              setCustomers={setCustomers}
+              warehouses={warehouses}
+              setWarehouses={setWarehouses}
+              transfers={transfers}
+              setTransfers={setTransfers}
+              expenses={expenses}
+              setExpenses={setExpenses}
+              teamMembers={teamMembers}
+              setTeamMembers={setTeamMembers}
+              partners={partners}
+              setPartners={setPartners}
+              handleBackupDatabase={handleBackupDatabase}
+              handleRestoreDatabase={handleRestoreDatabase}
+              handleSyncDatabase={handleSyncDatabase}
+              handleClearAllData={handleClearAllData}
+              showToast={showToast}
+            />
+          )}
+        </main>
+      </div>
+
+      {/* --- MOBILE BOTTOM NAVIGATION BAR (Android design guideline compliance) --- */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 text-slate-400 flex items-center justify-around py-2 px-1 z-40 shadow-[0_-5px_15px_-3px_rgba(0,0,0,0.3)] no-print">
+        {/* Tab 1: Dashboard */}
+        {hasTabAccess(currentUser.role, 'dashboard') && (
+          <button 
+            onClick={() => setActiveTab('dashboard')} 
+            className={`flex flex-col items-center gap-0.5 flex-1 transition cursor-pointer ${
+              activeTab === 'dashboard' ? 'text-indigo-400 font-bold scale-105' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <LayoutDashboard className="w-5 h-5" />
+            <span className="text-[9px] tracking-tight">{language === 'ar' ? 'الرئيسية' : 'Dashboard'}</span>
+          </button>
+        )}
+
+        {/* Tab 2: Inventory */}
+        {hasTabAccess(currentUser.role, 'inventory') && (
+          <button 
+            onClick={() => setActiveTab('inventory')} 
+            className={`flex flex-col items-center gap-0.5 flex-1 transition cursor-pointer ${
+              activeTab === 'inventory' ? 'text-indigo-400 font-bold scale-105' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Package className="w-5 h-5" />
+            <span className="text-[9px] tracking-tight">{language === 'ar' ? 'المستودع' : 'Inventory'}</span>
+          </button>
+        )}
+
+        {/* Tab 3: Dedicated Scanning Center */}
+        <button 
+          onClick={() => setIsScannerOpen(true)} 
+          className="flex flex-col items-center justify-center -mt-6 bg-indigo-600 text-white rounded-full w-12 h-12 shadow-lg shadow-indigo-600/35 border-4 border-slate-900 active:scale-95 transition cursor-pointer relative"
+        >
+          {/* Pulse highlight */}
+          <span className="absolute inset-0 rounded-full bg-indigo-500 animate-ping opacity-25"></span>
+          <Camera className="w-5 h-5" />
+        </button>
+
+        {/* Tab 4: Financials & ERP */}
+        {hasTabAccess(currentUser.role, 'erp') && (
+          <button 
+            onClick={() => setActiveTab('erp')} 
+            className={`flex flex-col items-center gap-0.5 flex-1 transition cursor-pointer ${
+              activeTab === 'erp' ? 'text-indigo-400 font-bold scale-105' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Briefcase className="w-5 h-5" />
+            <span className="text-[9px] tracking-tight">{language === 'ar' ? 'المالية' : 'ERP'}</span>
+          </button>
+        )}
+
+        {/* Tab 4.5: Reports */}
+        {hasTabAccess(currentUser.role, 'reports') && currentUser.role === 'admin' && (
+          <button 
+            onClick={() => setActiveTab('reports')} 
+            className={`flex flex-col items-center gap-0.5 flex-1 transition cursor-pointer ${
+              activeTab === 'reports' ? 'text-indigo-400 font-bold scale-105' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <FileBarChart className="w-5 h-5 text-amber-400" />
+            <span className="text-[9px] tracking-tight">{language === 'ar' ? 'التقارير' : 'Reports'}</span>
+          </button>
+        )}
+
+        {/* Tab 5: AI Advisor */}
+        {hasTabAccess(currentUser.role, 'ai') && (
+          <button 
+            onClick={() => setActiveTab('ai')} 
+            className={`flex flex-col items-center gap-0.5 flex-1 transition cursor-pointer ${
+              activeTab === 'ai' ? 'text-indigo-400 font-bold scale-105' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <BrainCircuit className="w-5 h-5" />
+            <span className="text-[9px] tracking-tight">{language === 'ar' ? 'الذكاء' : 'AI'}</span>
+          </button>
+        )}
+      </div>
+
+      {/* --- FLOATING CAM SCANNER FAB FOR HANDHELD TAB USERS (For easy thumb access on medium tablets/phones) --- */}
+      <button
+        onClick={() => setIsScannerOpen(true)}
+        className={`fixed hidden md:flex lg:hidden bottom-6 ${
+          isRtl ? 'left-6' : 'right-6'
+        } bg-indigo-600 hover:bg-indigo-700 text-white p-3.5 rounded-2xl shadow-xl shadow-indigo-600/30 z-40 active:scale-95 transition hover:scale-105 border border-indigo-500/30 cursor-pointer`}
+        title={language === 'ar' ? 'قارئ باركود الكاميرا' : 'Camera Barcode Scanner'}
+      >
+        <Camera className="w-5 h-5" />
+      </button>
+
+      {/* --- INTERACTIVE CAMERA BARCODE SCANNER MODAL --- */}
+      <BarcodeScanner 
+        isOpen={isScannerOpen}
+        onClose={() => setIsScannerOpen(false)}
+        products={products}
+        language={language}
+        onScanSuccess={handleScanSuccess}
+      />
+
+      {/* --- HIGH-CONTRAST FLOATING TOAST NOTIFICATION --- */}
+      {toast && (
+        <div 
+          className={`fixed bottom-20 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 px-4.5 py-3 rounded-2xl shadow-xl text-xs font-bold border animate-in slide-in-from-bottom duration-350 ${
+            toast.type === 'success' 
+              ? 'bg-slate-900 border-emerald-500/30 text-white' 
+              : 'bg-red-950 border-red-500/30 text-red-100'
+          }`}
+        >
+          {toast.type === 'success' ? (
+            <CheckCircle className="w-4.5 h-4.5 text-emerald-400 shrink-0" />
+          ) : (
+            <AlertCircle className="w-4.5 h-4.5 text-red-400 shrink-0" />
+          )}
+          <span>{toast.message}</span>
+        </div>
+      )}
+      {/* --- REAL-TIME INTUITIVE PRINT PREVIEW MODAL FOR WINDOWS & POS DEVICES --- */}
+      <PrintPreviewModal
+        isOpen={printPreview.isOpen}
+        onClose={() => setPrintPreview(prev => ({ ...prev, isOpen: false }))}
+        html={printPreview.html}
+        initialLayout={printPreview.layout}
+        title={printPreview.title}
+        language={language}
+        showToast={showToast}
+      />
+
+      {/* --- INSTALLATION DATA RECOVERY OR FRESH START DIALOG --- */}
+      {showInstallPrompt && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl text-slate-100 flex flex-col gap-6 text-center animate-in zoom-in-95 duration-200">
+            <div className="mx-auto bg-indigo-950/50 p-4 rounded-full border border-indigo-500/20 text-indigo-400">
+              <Database className="w-8 h-8" />
+            </div>
+            
+            <div className="space-y-2">
+              <h3 className="text-lg font-bold text-slate-100">
+                {language === 'ar' ? 'تنبيه تحديث وتثبيت البيانات' : 'System Update & Setup Detected'}
+              </h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                {language === 'ar' 
+                  ? 'تم رصد وجود بيانات ومستندات محفوظة من نسخة سابقة للبرنامج على هذا الجهاز. كيف تود استكمال المتابعة؟' 
+                  : 'We detected saved database records from a previous installation of the software on this machine. How would you like to continue?'}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3.5 mt-2">
+              {/* Option 1: Keep Old Data */}
+              <button
+                onClick={handleKeepOldData}
+                className="group flex flex-col items-center justify-center p-4 bg-slate-800/50 hover:bg-slate-800 border border-slate-700/60 hover:border-slate-600 rounded-2xl transition active:scale-[0.99] cursor-pointer"
+              >
+                <div className="flex items-center gap-2.5 w-full justify-center">
+                  <span className="p-1.5 bg-emerald-950/40 border border-emerald-500/20 text-emerald-400 rounded-lg group-hover:scale-110 transition">
+                    <CheckCircle className="w-4 h-4" />
+                  </span>
+                  <span className="text-xs font-bold text-slate-200">
+                    {language === 'ar' ? 'الاحتفاظ بالبيانات القديمة ومتابعة العمل' : 'Retain Existing Data & Continue'}
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1 text-center">
+                  {language === 'ar' 
+                    ? 'سيتم الحفاظ على جميع المنتجات، المبيعات، الفواتير، والعملاء بدون أي تعديل.' 
+                    : 'All previous inventory records, sales, invoices, and customers will be kept.'}
+                </p>
+              </button>
+
+              {/* Option 2: Clean Slate / Fresh Start */}
+              <button
+                onClick={handleStartFresh}
+                className="group flex flex-col items-center justify-center p-4 bg-red-950/15 hover:bg-red-950/25 border border-red-900/20 hover:border-red-950/40 rounded-2xl transition active:scale-[0.99] cursor-pointer"
+              >
+                <div className="flex items-center gap-2.5 w-full justify-center">
+                  <span className="p-1.5 bg-red-950/40 border border-red-500/20 text-red-400 rounded-lg group-hover:scale-110 transition">
+                    <Trash2 className="w-4 h-4" />
+                  </span>
+                  <span className="text-xs font-bold text-red-200">
+                    {language === 'ar' ? 'مسح البيانات السابقة والبدء من الصفر' : 'Full Clear & Fresh Start'}
+                  </span>
+                </div>
+                <p className="text-[10px] text-red-400/80 mt-1 text-center">
+                  {language === 'ar' 
+                    ? '⚠️ تحذير: سيتم مسح كافة البيانات وتصفير النظام بالكامل لتأسيس قاعدة بيانات جديدة ونظيفة.' 
+                    : '⚠️ Warning: This will permanently wipe all existing local database history to start from scratch.'}
+                </p>
+              </button>
+            </div>
+            
+            <p className="text-[9px] text-slate-500">
+              {language === 'ar' 
+                ? '* تضمن هذه الخطوة نجاح واستقرار التثبيت وتجنب أي تعارض في قواعد البيانات القديمة.' 
+                : '* This choice ensures safe database structure integrity and prevents installation mismatch errors.'}
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

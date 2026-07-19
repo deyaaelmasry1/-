@@ -1,0 +1,250 @@
+export interface Product {
+  id: string;
+  code: string; // SKU or Barcode
+  name: string;
+  categoryId: string;
+  quantity: number;
+  minQuantity: number; // Reorder level alert
+  costPrice: number;
+  sellingPrice: number;
+  supplierId?: string;
+  location?: string; // e.g., Shelf A4
+  description?: string;
+  warehouseId?: string; // Currently stored warehouse
+}
+
+export interface Category {
+  id: string;
+  name: string;
+}
+
+export type TransactionType = 'IN' | 'OUT' | 'SALE_RETURN' | 'PURCHASE_RETURN' | 'SAFE_DEPOSIT' | 'SAFE_WITHDRAWAL';
+
+export interface ProfessionalService {
+  id: string;
+  name: string;
+  type: 'shipping' | 'maintenance' | 'craft' | 'profession' | 'other';
+  price: number;
+  cost: number;
+  dateReceived: string; // ISO date string (YYYY-MM-DD)
+  dateDelivery: string; // ISO date string (YYYY-MM-DD)
+  status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'DELIVERED';
+  customerId?: string;
+  description?: string;
+}
+
+export interface Transaction {
+  id: string;
+  productId?: string;
+  serviceId?: string;
+  type: TransactionType;
+  quantity: number;
+  unitPrice: number;
+  date: string; // ISO date string
+  notes?: string;
+  customerId?: string; // link to customer for sale/return
+  supplierId?: string; // link to supplier for purchase/return
+  warehouseId?: string; // relevant warehouse location
+  cashierId?: string; // team member who performed the transaction
+  paymentMethod?: string; // payment method used (e.g., CASH, CARD, DEBT, INSTALLMENT, SETTLEMENT)
+}
+
+export interface Supplier {
+  id: string;
+  name: string;
+  company?: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  balance?: number; // negative means we owe supplier, positive means credit
+}
+
+export interface Customer {
+  id: string;
+  name: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  balance: number; // outstanding customer debt/balance
+}
+
+export interface Warehouse {
+  id: string;
+  name: string;
+  location?: string;
+}
+
+export interface WarehouseTransfer {
+  id: string;
+  productId: string;
+  fromWarehouseId: string;
+  toWarehouseId: string;
+  quantity: number;
+  date: string;
+  notes?: string;
+  performedBy?: string;
+  performedById?: string;
+}
+
+export interface Expense {
+  id: string;
+  title: string;
+  amount: number;
+  category: 'salaries' | 'rent' | 'utilities' | 'marketing' | 'other';
+  date: string;
+  notes?: string;
+}
+
+export interface TeamMember {
+  id: string;
+  name: string;
+  role: 'admin' | 'cashier' | 'storekeeper';
+  phone?: string;
+  active: boolean;
+  username?: string;
+  password?: string;
+}
+
+export interface Partner {
+  id: string;
+  name: string;
+  equityPercentage: number; // e.g., 40 for 40%
+  investedAmount: number;
+  notes?: string;
+}
+
+export interface PartnerDistribution {
+  id: string;
+  partnerId: string; // 'all' or specific Partner ID
+  partnerName: string; // 'الكل' or specific Partner Name
+  amount: number;
+  date: string;
+  notes?: string;
+  status: 'PAID' | 'PENDING';
+}
+
+export interface FinancialVoucher {
+  id: string;
+  voucherNumber: string; // e.g., VOUCH-1001
+  type: 'RECEIPT' | 'PAYMENT'; // RECEIPT (قبض), PAYMENT (صرف)
+  partyType: 'CUSTOMER' | 'SUPPLIER' | 'OTHER';
+  partyId?: string; // customerId or supplierId
+  amount: number;
+  date: string;
+  paymentMethod: 'CASH' | 'BANK' | 'CHECK' | 'SETTLEMENT';
+  notes?: string;
+  referenceInvoiceId?: string; // link to transaction/invoice
+  createdBy?: string; // name of team member
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'model';
+  text: string;
+  timestamp: string;
+}
+
+export interface InvoiceItem {
+  id: string;
+  name: string;
+  type: 'product' | 'service';
+  productId?: string;
+  serviceId?: string;
+  quantity: number;
+  unitPrice: number;
+}
+
+export interface Invoice {
+  id: string;
+  invoiceNo: string;
+  customerName: string;
+  customerPhone: string;
+  customerId?: string;
+  date: string;
+  paymentMethod: 'CASH' | 'CARD' | 'DEBT' | 'INSTALLMENT';
+  discount: number;
+  items: InvoiceItem[];
+  subtotal: number;
+  total: number;
+  cashierId?: string;
+}
+
+declare global {
+  interface Window {
+    electronAPI?: {
+      isElectron: boolean;
+      getPrinters: () => Promise<Array<{
+        name: string;
+        displayName: string;
+        description: string;
+        status: number;
+        isDefault: boolean;
+      }>>;
+      printDocument: (
+        html: string,
+        options: {
+          silent?: boolean;
+          printBackground?: boolean;
+          deviceName?: string;
+          color?: boolean;
+          landscape?: boolean;
+          copies?: number;
+        }
+      ) => Promise<{ success: boolean; error?: string }>;
+      savePDF: (
+        html: string,
+        options: {
+          layout?: 'thermal' | 'a4';
+          landscape?: boolean;
+        }
+      ) => Promise<{ success: boolean; error?: string; filePath?: string; cancelled?: boolean }>;
+      hashPassword: (password: string) => Promise<string | null>;
+      verifyPassword: (password: string, encoded: string) => Promise<boolean>;
+      printerSelfTest: (deviceName?: string) => Promise<{ available: boolean; printer: unknown; platform: string }>;
+      openSystemPreview: (
+        html: string,
+        options: {
+          layout?: 'thermal' | 'a4';
+          landscape?: boolean;
+        }
+      ) => Promise<{ success: boolean; error?: string }>;
+      database?: {
+        list: (args: Record<string, unknown>) => Promise<{ rows: any[]; count: number; page: number; pageSize: number; pages: number }>;
+        createQuotation: (data: unknown) => Promise<any>;
+        updateQuotation: (data: unknown) => Promise<any>;
+        getQuotation: (id: string) => Promise<any>;
+        updateQuotationStatus: (data: unknown) => Promise<any>;
+        createInstallment: (data: unknown) => Promise<any>;
+        collectInstallment: (data: unknown) => Promise<any>;
+        savePayrollEmployee: (data: unknown) => Promise<any>;
+        addPayrollAdjustment: (data: unknown) => Promise<any>;
+        generatePayrollRun: (data: unknown) => Promise<any>;
+        setPayrollRunStatus: (data: unknown) => Promise<any>;
+        getPayrollRun: (id: string) => Promise<any>;
+        saveAttendanceDevice: (data: unknown) => Promise<any>;
+        recordAttendance: (data: unknown) => Promise<any>;
+        importAttendance: (rows: unknown[]) => Promise<any>;
+        saveEmployeeSignature: (data: unknown) => Promise<any>;
+        attendanceSummary: (args?: Record<string, unknown>) => Promise<any[]>;
+        testBiometricDevice: (device: unknown) => Promise<any>;
+        biometricDeviceCapabilities: (device: unknown) => Promise<any>;
+        syncBiometricDevice: (device: unknown) => Promise<any>;
+        softDelete: (data: unknown) => Promise<boolean>;
+        restoreDeleted: (id: string) => Promise<boolean>;
+        purgeDeleted: (id: string) => Promise<boolean>;
+        importLegacy: (data: unknown) => Promise<Record<string, number>>;
+        stats: () => Promise<Record<string, number>>;
+        getCollections: (names?: string[]) => Promise<Record<string, any[]>>;
+        saveCollections: (collections: Record<string, unknown[]>, options?: Record<string, unknown>) => Promise<Record<string, number>>;
+        hasMigratedLegacy: () => Promise<boolean>;
+        exportSnapshot: () => Promise<unknown>;
+        importSnapshot: (snapshot: unknown) => Promise<Record<string, number>>;
+        batchSaveCollections: (batches: Record<string, unknown[]>[], options?: Record<string, unknown>) => Promise<Record<string, number>>;
+        enqueueSyncChange: (data: {entityType:string;entityId:string;operation:'UPSERT'|'DELETE';payload?:unknown}) => Promise<{id:number}>;
+        pendingSync: (args?: Record<string, unknown>) => Promise<{rows:any[];count:number;page:number;pageSize:number;pages:number}>;
+        optimize: () => Promise<{ok:boolean;stats:Record<string,number>}>;
+      };
+    };
+  }
+}
+

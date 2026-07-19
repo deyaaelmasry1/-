@@ -1,0 +1,29 @@
+const os = require('node:os');
+const fs = require('node:fs');
+const path = require('node:path');
+const { performance } = require('node:perf_hooks');
+const db = require('../database.cjs');
+
+const productCount = Number(process.env.ERP_STRESS_PRODUCTS || 100000);
+const invoiceCount = Number(process.env.ERP_STRESS_INVOICES || 50000);
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'erp-stress-'));
+const mark = (name, start) => ({ name, ms: Math.round((performance.now() - start) * 100) / 100 });
+const timings = [];
+try {
+  let t = performance.now(); db.openDatabase(root); timings.push(mark('open+migrate', t));
+  const categories = [{id:'cat-main',name:'General'}];
+  const warehouses = [{id:'wh-main',name:'Main'}];
+  const products = Array.from({length: productCount}, (_,i)=>({id:`p${i}`,code:`P${i}`,barcode:`B${i}`,name:`Product ${i}`,categoryId:'cat-main',warehouseId:'wh-main',quantity:i%500,costPrice:10+(i%20),sellingPrice:15+(i%30)}));
+  const invoices = Array.from({length: invoiceCount}, (_,i)=>({id:`inv${i}`,invoiceNo:`INV-${i}`,paymentMethod:'CASH',date:new Date(2026,0,1+(i%28)).toISOString(),subtotal:100,total:100,paid:100,status:'PAID',items:[]}));
+  t = performance.now();
+  db.saveCollections({categories,warehouses,products,invoices,customers:[],suppliers:[],transactions:[],transfers:[],expenses:[],services:[],partners:[],distributions:[],teamMembers:[],vouchers:[]},{projectRelational:true,markMigrated:true});
+  timings.push(mark('bulk-save', t));
+  t = performance.now(); const p = db.list({table:'products',page:500,pageSize:100,search:'Product 999'}); timings.push(mark('product-search-page', t));
+  t = performance.now(); const inv = db.list({table:'invoices',page:200,pageSize:100,search:'INV-49'}); timings.push(mark('invoice-search-page', t));
+  t = performance.now(); const snap = db.exportSnapshot(); timings.push(mark('backup-export', t));
+  for(let i=0;i<1000;i++) db.enqueueSyncChange({entityType:'product',entityId:`p${i}`,operation:'UPSERT',payload:{id:`p${i}`}});
+  t = performance.now(); const pending=db.pendingSync({limit:1000}); timings.push(mark('offline-sync-queue-read', t));
+  t = performance.now(); db.optimizeDatabase(); timings.push(mark('checkpoint-optimize', t));
+  const dbPath=path.join(root,'data','erp-hub.sqlite');
+  console.log(JSON.stringify({productCount,invoiceCount,productPageCount:p.count,invoicePageCount:inv.count,pendingSync:pending.count,backupCollections:Object.keys(snap.collections||{}).length,databaseBytes:fs.statSync(dbPath).size,timings},null,2));
+} finally { try{db.closeDatabase()}catch{} fs.rmSync(root,{recursive:true,force:true}); }

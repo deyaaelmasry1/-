@@ -1,0 +1,957 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Printer, FileText, Download, RefreshCw, Layers, ZoomIn, ZoomOut, RotateCcw, Share2, Image } from 'lucide-react';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
+
+interface PrintPreviewModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  html: string;
+  initialLayout: 'thermal' | 'a4';
+  title?: string;
+  language: 'ar' | 'en';
+  showToast: (msg: string, type?: 'success' | 'error') => void;
+}
+
+export default function PrintPreviewModal({
+  isOpen,
+  onClose,
+  html,
+  initialLayout,
+  title,
+  language,
+  showToast
+}: PrintPreviewModalProps) {
+  const [layout, setLayout] = useState<'thermal' | 'a4'>(initialLayout);
+  const [orientation, setOrientation] = useState<'portrait' | 'landscape'>('portrait');
+  const [copies, setCopies] = useState<number>(1);
+  const [colorMode, setColorMode] = useState<'color' | 'grayscale'>('color');
+  const [zoom, setZoom] = useState<number>(initialLayout === 'thermal' ? 100 : 75);
+  const [printMode, setPrintMode] = useState<'silent' | 'pdf' | 'browser'>(() => {
+    return window.electronAPI ? 'silent' : 'browser';
+  });
+
+  const [margins, setMargins] = useState<'none' | 'narrow' | 'normal' | 'wide'>('normal');
+  const [contentScale, setContentScale] = useState<number>(110); // Default to 110% to make it nice and readable!
+  const [alignment, setAlignment] = useState<'center' | 'left' | 'right'>('center');
+  
+  const [printers, setPrinters] = useState<Array<{ name: string; isDefault: boolean }>>([]);
+  const [selectedPrinter, setSelectedPrinter] = useState<string>('');
+  const [isLoadingPrinters, setIsLoadingPrinters] = useState<boolean>(false);
+  const [isPrinting, setIsPrinting] = useState<boolean>(false);
+  const [isIframeLoaded, setIsIframeLoaded] = useState<boolean>(false);
+  const [isExporting, setIsExporting] = useState<'pdf' | 'image' | null>(null);
+
+  const isAr = language === 'ar';
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  // Sync layout state when props change
+  useEffect(() => {
+    if (isOpen) {
+      setLayout(initialLayout);
+      setZoom(initialLayout === 'thermal' ? 100 : 70);
+    }
+  }, [isOpen, initialLayout]);
+
+  // Load physical printers from Electron on mount/open
+  useEffect(() => {
+    if (isOpen && window.electronAPI) {
+      setIsLoadingPrinters(true);
+      window.electronAPI.getPrinters()
+        .then((list) => {
+          setPrinters(list);
+          const defaultPr = list.find(p => p.isDefault) || list[0];
+          if (defaultPr) {
+            setSelectedPrinter(defaultPr.name);
+          }
+        })
+        .catch((err) => {
+          console.error('Failed to load system printers:', err);
+        })
+        .finally(() => {
+          setIsLoadingPrinters(false);
+        });
+    }
+  }, [isOpen]);
+
+  // Write isolated contents into the preview iframe whenever html, layout, or color mode changes
+  useEffect(() => {
+    if (isOpen && iframeRef.current) {
+      setIsIframeLoaded(false);
+      const doc = iframeRef.current.contentDocument || iframeRef.current.contentWindow?.document;
+      if (doc) {
+        doc.open();
+        
+        let processedHtml = html;
+        
+        // Add color mode overrides inside iframe scope
+        if (colorMode === 'grayscale') {
+          const grayscaleStyle = `<style>html, body { filter: grayscale(100%) !important; -webkit-filter: grayscale(100%) !important; }</style>`;
+          processedHtml = processedHtml.replace('</head>', `${grayscaleStyle}</head>`);
+        }
+
+        // Determine margin padding
+        let marginPadding = '25px';
+        if (margins === 'none') marginPadding = '0px';
+        if (margins === 'narrow') marginPadding = '10px';
+        if (margins === 'wide') marginPadding = '45px';
+
+        const alignStyle = alignment === 'center' ? 'center' : alignment === 'left' ? 'flex-start' : 'flex-end';
+
+        // Add standard printing optimization styles to isolate content in preview iframe
+        const standardPreviewOverrides = `
+          <style>
+            ::-webkit-scrollbar { display: none !important; }
+            body {
+              margin: 0 !important;
+              padding: ${layout === 'thermal' ? '12px' : marginPadding} !important;
+              background-color: #ffffff !important;
+              color: #000000 !important;
+              overflow-x: hidden !important;
+              display: flex !important;
+              flex-direction: column !important;
+              align-items: ${alignStyle} !important;
+            }
+            .print-page {
+              zoom: ${contentScale}% !important;
+              transform-origin: top ${alignment} !important;
+              box-shadow: none !important;
+              border: none !important;
+              margin: 0 !important;
+            }
+          </style>
+        `;
+        processedHtml = processedHtml.replace('</head>', `${standardPreviewOverrides}</head>`);
+
+        doc.write(processedHtml);
+        doc.close();
+
+        // Adjust height for thermal rolls dynamically once the document finishes rendering
+        setTimeout(() => {
+          adjustIframeSize();
+          setIsIframeLoaded(true);
+        }, 150);
+      }
+    }
+  }, [isOpen, html, layout, colorMode, margins, contentScale, alignment]);
+
+  const adjustIframeSize = () => {
+    if (!iframeRef.current) return;
+    try {
+      const doc = iframeRef.current.contentDocument || iframeRef.current.contentWindow?.document;
+      if (doc && doc.body) {
+        if (layout === 'thermal') {
+          const contentHeight = doc.documentElement.scrollHeight || doc.body.scrollHeight;
+          iframeRef.current.style.height = `${contentHeight + 30}px`;
+          iframeRef.current.style.width = '80mm';
+        } else {
+          // Fixed A4 dimensions
+          if (orientation === 'portrait') {
+            iframeRef.current.style.width = '210mm';
+            iframeRef.current.style.height = '297mm';
+          } else {
+            iframeRef.current.style.width = '297mm';
+            iframeRef.current.style.height = '210mm';
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error adjusting preview size:', e);
+    }
+  };
+
+  useEffect(() => {
+    adjustIframeSize();
+  }, [layout, orientation]);
+
+  if (!isOpen) return null;
+
+  // Zoom control helpers
+  const handleZoomIn = () => setZoom(prev => Math.min(prev + 10, 200));
+  const handleZoomOut = () => setZoom(prev => Math.max(prev - 10, 30));
+  const handleZoomReset = () => setZoom(layout === 'thermal' ? 100 : 70);
+
+  // High-fidelity share or download helper
+  const shareOrDownloadFile = async (blob: Blob, fileName: string, mimeType: string) => {
+    const file = new File([blob], fileName, { type: mimeType });
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({
+          files: [file],
+          title: title || (isAr ? 'فاتورة' : 'Invoice'),
+          text: isAr ? 'مشاركة الفاتورة' : 'Share Invoice'
+        });
+        showToast(isAr ? '✅ تم مشاركة الملف بنجاح!' : '✅ Shared successfully!', 'success');
+        return;
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          console.warn('Native share failed, falling back to download:', err);
+        } else {
+          return; // User cancelled
+        }
+      }
+    }
+
+    // Direct Download Fallback
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast(isAr ? '📥 تم تحميل الملف وحفظه بنجاح!' : '📥 File downloaded and saved successfully!', 'success');
+  };
+
+  const handleExportAsPdf = async () => {
+    if (!iframeRef.current) return;
+    setIsExporting('pdf');
+    try {
+      const doc = iframeRef.current.contentDocument || iframeRef.current.contentWindow?.document;
+      if (!doc) {
+        throw new Error('Iframe document not loaded');
+      }
+
+      // Target the body to get all margins and content
+      const element = doc.body;
+
+      const canvas = await html2canvas(element, {
+        scale: 2.5, // Ultra-sharp resolution
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        scrollX: 0,
+        scrollY: 0,
+        windowWidth: doc.documentElement.scrollWidth,
+        windowHeight: doc.documentElement.scrollHeight
+      });
+
+      const imgData = canvas.toDataURL('image/png');
+      const cleanTitle = (title || (isAr ? 'فاتورة' : 'Invoice')).trim().replace(/[^a-zA-Z0-9آ-ي\s-_]/g, '');
+      const fileName = `${cleanTitle}.pdf`;
+
+      if (layout === 'thermal') {
+        const imgWidth = 80; // 80mm width
+        const imgHeight = (canvas.height * imgWidth) / canvas.width;
+        const pdf = new jsPDF('p', 'mm', [imgWidth, imgHeight]);
+        pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+        
+        const blob = pdf.output('blob');
+        await shareOrDownloadFile(blob, fileName, 'application/pdf');
+      } else {
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pdfHeight = pdf.internal.pageSize.getHeight();
+        
+        const canvasWidth = canvas.width;
+        const canvasHeight = canvas.height;
+        const pageHeightInMm = (canvasHeight * pdfWidth) / canvasWidth;
+        
+        if (pageHeightInMm <= pdfHeight) {
+          pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pageHeightInMm);
+        } else {
+          let heightLeft = pageHeightInMm;
+          let position = 0;
+          let pageNum = 1;
+          
+          while (heightLeft > 0) {
+            pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pageHeightInMm);
+            heightLeft -= pdfHeight;
+            position -= pdfHeight;
+            
+            if (heightLeft > 0) {
+              pdf.addPage();
+              pageNum++;
+            }
+          }
+        }
+        
+        const blob = pdf.output('blob');
+        await shareOrDownloadFile(blob, fileName, 'application/pdf');
+      }
+    } catch (err: any) {
+      console.error('PDF export failure:', err);
+      showToast(isAr ? `❌ فشل تصدير ملف PDF: ${err.message}` : `❌ Failed to export PDF: ${err.message}`, 'error');
+    } finally {
+      setIsExporting(null);
+    }
+  };
+
+  const handleExportAsImage = async () => {
+    if (!iframeRef.current) return;
+    setIsExporting('image');
+    try {
+      const doc = iframeRef.current.contentDocument || iframeRef.current.contentWindow?.document;
+      if (!doc) {
+        throw new Error('Iframe document not loaded');
+      }
+
+      const element = doc.body;
+
+      const canvas = await html2canvas(element, {
+        scale: 2.5, // High resolution
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        scrollX: 0,
+        scrollY: 0,
+        windowWidth: doc.documentElement.scrollWidth,
+        windowHeight: doc.documentElement.scrollHeight
+      });
+
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          throw new Error('Canvas conversion to blob failed');
+        }
+        const cleanTitle = (title || (isAr ? 'فاتورة' : 'Invoice')).trim().replace(/[^a-zA-Z0-9آ-ي\s-_]/g, '');
+        const fileName = `${cleanTitle}.png`;
+        await shareOrDownloadFile(blob, fileName, 'image/png');
+        setIsExporting(null);
+      }, 'image/png');
+      
+    } catch (err: any) {
+      console.error('Image export failure:', err);
+      showToast(isAr ? `❌ فشل تصدير الصورة: ${err.message}` : `❌ Failed to export image: ${err.message}`, 'error');
+      setIsExporting(null);
+    }
+  };
+
+  // High-fidelity print execution
+  const handlePrint = async () => {
+    setIsPrinting(true);
+    try {
+      if (printMode === 'silent' && window.electronAPI) {
+        // Direct, high-speed POS printer routing in Electron
+        const printOptions = {
+          silent: true,
+          printBackground: true,
+          deviceName: selectedPrinter,
+          color: colorMode === 'color',
+          landscape: orientation === 'landscape',
+          copies: copies
+        };
+
+        const res = await window.electronAPI.printDocument(html, printOptions);
+        if (res.success) {
+          showToast(
+            isAr 
+              ? '✅ تمت الطباعة المباشرة والمزامنة بنجاح!' 
+              : '✅ Direct print and sync completed successfully!', 
+            'success'
+          );
+          onClose();
+        } else {
+          showToast(
+            isAr 
+              ? `❌ فشل الاتصال بالطابعة: ${res.error || 'تأكد من تشغيل الطابعة وتوصيلها بالمنفذ'}` 
+              : `❌ Printer connection failed: ${res.error || 'Ensure the printer is online and connected'}`, 
+            'error'
+          );
+        }
+      } else if (printMode === 'pdf' && window.electronAPI) {
+        // High-fidelity PDF saving on Windows
+        const res = await window.electronAPI.savePDF(html, {
+          layout,
+          landscape: orientation === 'landscape'
+        });
+
+        if (res.success) {
+          showToast(
+            isAr 
+              ? `✅ تم حفظ ملف الـ PDF بنجاح في: ${res.filePath}` 
+              : `✅ PDF saved successfully to: ${res.filePath}`, 
+            'success'
+          );
+          onClose();
+        } else if (!res.cancelled) {
+          showToast(
+            isAr 
+              ? `❌ فشل حفظ ملف PDF: ${res.error || 'حدث خطأ غير متوقع'}` 
+              : `❌ Failed to save PDF: ${res.error || 'Unexpected error'}`, 
+            'error'
+          );
+        }
+      } else if (printMode === 'browser' && window.electronAPI) {
+        // CRITICAL WORKAROUND: In Electron on Windows, standard window.print() is often blocked or lacks print preview.
+        // We route this through 'openSystemPreview' which compiles to a high-fidelity vector PDF and launches the host OS PDF viewer.
+        // The host OS PDF viewer (like Microsoft Edge or Chrome) has flawless native print preview and prints perfectly!
+        showToast(
+          isAr 
+            ? '🔄 جاري تحضير مستند المعاينة الرسمي في نظام ويندوز...' 
+            : '🔄 Generating native Windows print preview window...',
+          'success'
+        );
+        const res = await window.electronAPI.openSystemPreview(html, {
+          layout,
+          landscape: orientation === 'landscape'
+        });
+
+        if (res.success) {
+          showToast(
+            isAr 
+              ? '✅ تم فتح معاينة نظام ويندوز للطباعة بنجاح!' 
+              : '✅ Windows system native print preview launched successfully!',
+            'success'
+          );
+          onClose();
+        } else {
+          showToast(
+            isAr 
+              ? `❌ فشل تشغيل المعاينة: ${res.error || 'يرجى مراجعة إعدادات نظام التشغيل'}` 
+              : `❌ Failed to launch preview: ${res.error || 'Please review system settings'}`,
+            'error'
+          );
+        }
+      } else {
+        // Traditional Web Browser Printing (for regular web apps outside Electron)
+        // Clean dynamic DOM swap to prevent main app styling leaks
+        const existingArea = document.getElementById('erp-print-area');
+        if (existingArea) existingArea.remove();
+        
+        const existingStyle = document.getElementById('erp-print-style');
+        if (existingStyle) existingStyle.remove();
+
+        // Parse styles and body correctly to prevent invalid nested HTML
+        let bodyContent = html;
+        const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+        if (bodyMatch) {
+          bodyContent = bodyMatch[1];
+        }
+
+        const styleMatches = html.match(/<style[^>]*>([\s\S]*?)<\/style>/gi);
+        let headStyles = '';
+        if (styleMatches) {
+          headStyles = styleMatches.join('\n');
+        }
+
+        // Determine margin padding
+        let marginPadding = '25px';
+        if (margins === 'none') marginPadding = '0px';
+        if (margins === 'narrow') marginPadding = '10px';
+        if (margins === 'wide') marginPadding = '45px';
+
+        const alignStyle = alignment === 'center' ? 'center' : alignment === 'left' ? 'flex-start' : 'flex-end';
+
+        const style = document.createElement('style');
+        style.id = 'erp-print-style';
+        style.innerHTML = `
+          ${headStyles}
+          @media print {
+            body > *:not(#erp-print-area) { display: none !important; }
+            #root { display: none !important; }
+            #erp-print-area, #erp-print-area * { display: block !important; }
+            #erp-print-area {
+              position: absolute !important;
+              left: 0 !important;
+              top: 0 !important;
+              width: 100% !important;
+              height: auto !important;
+              background: white !important;
+              color: black !important;
+              padding: 0 !important;
+              margin: 0 !important;
+              z-index: 9999999 !important;
+              opacity: 1 !important;
+              visibility: visible !important;
+            }
+
+            @page {
+              size: ${layout === 'thermal' ? 'auto' : `A4 portrait`};
+              margin: 0 !important;
+            }
+
+            .erp-printed-content {
+              padding: ${layout === 'thermal' ? '4mm 2mm' : marginPadding} !important;
+              display: flex !important;
+              flex-direction: column !important;
+              align-items: ${alignStyle} !important;
+              width: 100% !important;
+              box-sizing: border-box !important;
+            }
+
+            .print-page {
+              zoom: ${contentScale}% !important;
+              transform-origin: top ${alignment} !important;
+              box-shadow: none !important;
+              border: none !important;
+              margin: 0 !important;
+              width: ${layout === 'thermal' ? '80mm' : '100%'} !important;
+              max-width: ${layout === 'thermal' ? '80mm' : 'none'} !important;
+            }
+          }
+        `;
+        document.head.appendChild(style);
+
+        const printArea = document.createElement('div');
+        printArea.id = 'erp-print-area';
+        printArea.innerHTML = `
+          <div class="erp-printed-content">
+            ${bodyContent}
+          </div>
+        `;
+        document.body.appendChild(printArea);
+
+        setTimeout(() => {
+          try {
+            window.focus();
+            window.print();
+          } catch (e) {
+            console.error('Browser print error:', e);
+          }
+          
+          // Cleanup
+          const cleanup = () => {
+            try {
+              const el = document.getElementById('erp-print-area');
+              if (el) el.remove();
+              const st = document.getElementById('erp-print-style');
+              if (st) st.remove();
+            } catch (err) {}
+            window.removeEventListener('afterprint', cleanup);
+          };
+          window.addEventListener('afterprint', cleanup);
+          setIsPrinting(false);
+          onClose();
+        }, 150);
+      }
+    } catch (err: any) {
+      console.error('Print failure:', err);
+      showToast(isAr ? `❌ فشل تشغيل محرك الطباعة: ${err.message}` : `❌ Failed to launch printing: ${err.message}`, 'error');
+    } finally {
+      setIsPrinting(false);
+    }
+  };
+
+  return (
+    <div id="erp-print-preview-modal" className="fixed inset-0 bg-slate-950/90 backdrop-blur-sm flex z-[999999] overflow-hidden select-none font-sans" dir={isAr ? 'rtl' : 'ltr'}>
+      
+      {/* 1. Left/Center Area: Big Realistic Scrollable Print Canvas */}
+      <div className="flex-1 flex flex-col h-full bg-slate-900 overflow-hidden">
+        
+        {/* Document Title & Zoom Control Bar */}
+        <div className="w-full bg-slate-950/50 border-b border-slate-800/80 px-6 py-4 flex items-center justify-between text-slate-400 text-xs shrink-0">
+          <div className="flex items-center gap-2">
+            <Layers className="w-4 h-4 text-indigo-400 animate-pulse" />
+            <span className="font-extrabold text-slate-100 text-sm">{title || (isAr ? 'معاينة مستندات الطباعة الذكية' : 'Smart Print Document Preview')}</span>
+            <span className="font-mono bg-slate-800 text-slate-300 px-2.5 py-1 rounded-md text-[10px] ml-2">
+              {layout === 'thermal' ? (isAr ? 'رول حراري 80 مم' : 'Thermal Roll 80mm') : (isAr ? 'ورق A4 القياسي' : 'Standard A4 Page')}
+            </span>
+          </div>
+          
+          {/* Zoom controls */}
+          <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 p-1 rounded-xl">
+            <button 
+              onClick={handleZoomOut} 
+              title={isAr ? 'تجميع / تصغير' : 'Zoom Out'}
+              className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-white rounded-lg transition cursor-pointer"
+            >
+              <ZoomOut className="w-4 h-4" />
+            </button>
+            <span className="font-mono px-3 text-slate-300 font-bold min-w-[50px] text-center">{zoom}%</span>
+            <button 
+              onClick={handleZoomIn} 
+              title={isAr ? 'تكبير' : 'Zoom In'}
+              className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-white rounded-lg transition cursor-pointer"
+            >
+              <ZoomIn className="w-4 h-4" />
+            </button>
+            <div className="w-px h-4 bg-slate-800 mx-1" />
+            <button 
+              onClick={handleZoomReset} 
+              title={isAr ? 'إعادة ضبط الحجم' : 'Reset Zoom'}
+              className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-white rounded-lg transition cursor-pointer"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Realistic Scrollable Paper Stage */}
+        <div className="flex-1 overflow-auto p-8 flex justify-center items-start bg-slate-900/60 relative">
+          
+          {!isIframeLoaded && (
+            <div className="absolute inset-0 bg-slate-900/45 backdrop-blur-xs flex flex-col items-center justify-center gap-3 z-50">
+              <RefreshCw className="w-8 h-8 text-indigo-500 animate-spin" />
+              <span className="text-slate-300 text-xs font-bold">{isAr ? 'جاري تهيئة المعاينة بنسبة 100%...' : 'Compiling high-fidelity preview...'}</span>
+            </div>
+          )}
+
+          {/* Scale transformer wrap */}
+          <div 
+            className="transition-all duration-300 origin-top flex justify-center py-4"
+            style={{ transform: `scale(${zoom / 100})` }}
+          >
+            {/* Paper outline with perfect boundaries */}
+            <div 
+              className={`bg-white shadow-[0_25px_60px_-15px_rgba(0,0,0,0.8)] border border-slate-300/80 overflow-hidden relative ${
+                layout === 'thermal' 
+                  ? 'rounded-sm border-dashed' 
+                  : 'rounded-md'
+              }`}
+            >
+              {/* Isolated sandboxed web iframe */}
+              <iframe
+                ref={iframeRef}
+                title="print-rendering-sandbox"
+                className="block border-0 bg-white"
+                sandbox="allow-same-origin allow-scripts"
+                style={{
+                  width: layout === 'thermal' ? '80mm' : orientation === 'portrait' ? '210mm' : '297mm',
+                  minHeight: layout === 'thermal' ? '120mm' : orientation === 'portrait' ? '297mm' : '210mm',
+                  overflow: 'hidden'
+                }}
+              />
+              
+              {/* Thermal paper end tear indicator */}
+              {layout === 'thermal' && (
+                <div className="w-full h-4 border-t border-dashed border-slate-300 bg-slate-50 flex items-center justify-center select-none shrink-0">
+                  <span className="text-[8px] text-slate-400 font-mono tracking-widest uppercase">✂️ TEAR HERE / اقطع هنا ✂️</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 2. Right Area: POS-Grade Print Control Sidebar */}
+      <div className="w-96 h-full bg-slate-950 border-r md:border-l border-slate-800/60 flex flex-col shadow-2xl shrink-0">
+        
+        {/* Sidebar Header */}
+        <div className="p-5 border-b border-slate-800/80 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-indigo-600/10 text-indigo-400 rounded-xl">
+              <Printer className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-black text-sm text-white">{isAr ? 'خيارات المحاذاة والطباعة' : 'Smart Print Settings'}</h3>
+              <p className="text-[10px] text-slate-500">{isAr ? 'تهيئة ومعالجة مستندات الفواتير' : 'Configure and route print outputs'}</p>
+            </div>
+          </div>
+          <button 
+            onClick={onClose}
+            className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-white rounded-lg transition cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Sidebar Content */}
+        <div className="flex-1 overflow-y-auto p-5 space-y-5 text-start">
+          
+          {/* Section: Mode selection */}
+          <div className="space-y-2">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+              {isAr ? 'طريقة إخراج المستند والمعاينة' : 'Print Engine / Output'}
+            </label>
+            <div className="grid grid-cols-1 gap-1.5">
+              
+              {window.electronAPI && (
+                <>
+                  {/* Direct silent print */}
+                  <button
+                    onClick={() => setPrintMode('silent')}
+                    className={`flex items-center gap-2.5 p-3 rounded-xl border text-xs font-bold transition cursor-pointer text-start ${
+                      printMode === 'silent'
+                        ? 'bg-indigo-600/10 border-indigo-500 text-indigo-300'
+                        : 'border-slate-800 bg-slate-900/40 text-slate-400 hover:border-slate-700 hover:text-slate-300'
+                    }`}
+                  >
+                    <Printer className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
+                    <div className="flex-1">
+                      <div className="text-[11px] font-extrabold">{isAr ? 'طباعة سريعة ومباشرة (طابعات الكاشير)' : 'Fast Direct POS Print'}</div>
+                      <div className="text-[9px] text-slate-500 mt-0.5">{isAr ? 'يرسل الفاتورة فوراً لطابعتك الافتراضية بدون أي حوارات' : 'Sends instantly to cashier printer with no popup'}</div>
+                    </div>
+                  </button>
+
+                  {/* Windows Native System Print with Preview */}
+                  <button
+                    onClick={() => setPrintMode('browser')}
+                    className={`flex items-center gap-2.5 p-3 rounded-xl border text-xs font-bold transition cursor-pointer text-start ${
+                      printMode === 'browser'
+                        ? 'bg-indigo-600/10 border-indigo-500 text-indigo-300'
+                        : 'border-slate-800 bg-slate-900/40 text-slate-400 hover:border-slate-700 hover:text-slate-300'
+                    }`}
+                  >
+                    <FileText className="w-4.5 h-4.5 text-indigo-400 shrink-0" />
+                    <div className="flex-1">
+                      <div className="text-[11px] font-extrabold">{isAr ? 'معاينة نظام Windows الحديثة' : 'Windows Native Print Preview'}</div>
+                      <div className="text-[9px] text-slate-500 mt-0.5">{isAr ? 'يفتح واجهة ويندوز الرسمية 100% مع خيارات الحجم والصفحات' : 'Opens full Windows system preview dialog flawlessly'}</div>
+                    </div>
+                  </button>
+
+                  {/* Save PDF */}
+                  <button
+                    onClick={() => setPrintMode('pdf')}
+                    className={`flex items-center gap-2.5 p-3 rounded-xl border text-xs font-bold transition cursor-pointer text-start ${
+                      printMode === 'pdf'
+                        ? 'bg-indigo-600/10 border-indigo-500 text-indigo-300'
+                        : 'border-slate-800 bg-slate-900/40 text-slate-400 hover:border-slate-700 hover:text-slate-300'
+                    }`}
+                  >
+                    <Download className="w-4.5 h-4.5 text-sky-400 shrink-0" />
+                    <div className="flex-1">
+                      <div className="text-[11px] font-extrabold">{isAr ? 'تصدير وحفظ ملف PDF على القرص' : 'Export & Save PDF File'}</div>
+                      <div className="text-[9px] text-slate-500 mt-0.5">{isAr ? 'يحول المستند إلى ملف PDF متجه عالي الدقة للحفظ' : 'Saves report to your hard drive with custom location'}</div>
+                    </div>
+                  </button>
+                </>
+              )}
+
+              {!window.electronAPI && (
+                <button
+                  onClick={() => setPrintMode('browser')}
+                  className="flex items-center gap-2.5 p-3 rounded-xl border border-indigo-500 bg-indigo-600/10 text-indigo-300 text-xs font-bold text-start"
+                >
+                  <FileText className="w-4.5 h-4.5 shrink-0" />
+                  <div className="flex-1">
+                    <div className="text-[11px] font-extrabold">{isAr ? 'حوار طباعة المتصفح القياسي' : 'Standard Web Print'}</div>
+                    <div className="text-[9px] text-slate-400 mt-0.5">{isAr ? 'استدعاء نظام المعاينة المدمج في متصفح الويب' : 'Triggers browser printer control window'}</div>
+                  </div>
+                </button>
+              )}
+
+            </div>
+          </div>
+
+          {/* Section: Dynamic Printer Selection (For silent print only) */}
+          {printMode === 'silent' && window.electronAPI && (
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                {isAr ? 'طابعة الفواتير والتقارير المستهدفة' : 'Target System Printer'}
+              </label>
+              {isLoadingPrinters ? (
+                <div className="flex items-center justify-center p-3 bg-slate-900 rounded-xl text-xs text-slate-500 gap-2">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>{isAr ? 'جاري قراءة الطابعات المثبتة...' : 'Reading hardware devices...'}</span>
+                </div>
+              ) : printers.length === 0 ? (
+                <div className="p-3 bg-red-950/30 border border-red-500/20 rounded-xl text-[11px] text-red-400">
+                  {isAr ? '⚠️ لم يتم العثور على طابعات متصلة بالنظام حالياً!' : '⚠️ No installed system printers detected!'}
+                </div>
+              ) : (
+                <select
+                  value={selectedPrinter}
+                  onChange={(e) => setSelectedPrinter(e.target.value)}
+                  className="w-full bg-slate-900 hover:bg-slate-850 text-xs font-bold text-slate-200 p-3 rounded-xl border border-slate-800 focus:border-indigo-500 focus:outline-none transition"
+                >
+                  {printers.map((p) => (
+                    <option key={p.name} value={p.name} className="bg-slate-950 text-white">
+                      {p.name} {p.isDefault ? (isAr ? '★ (الافتراضية)' : '★ (Default)') : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
+
+          {/* Section: Layout Switcher */}
+          <div className="space-y-2">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+              {isAr ? 'تنسيق الصفحة وحجم الورق' : 'Paper Layout Template'}
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => {
+                  setLayout('thermal');
+                  setZoom(100);
+                }}
+                className={`p-3 rounded-xl border text-[11px] font-bold transition flex flex-col items-center gap-1 cursor-pointer ${
+                  layout === 'thermal'
+                    ? 'bg-indigo-600/10 border-indigo-500 text-indigo-400'
+                    : 'border-slate-800 bg-slate-900/30 text-slate-500 hover:border-slate-700 hover:text-slate-400'
+                }`}
+              >
+                <span className="font-extrabold text-xs">Thermal 80mm</span>
+                <span className="text-[8px] opacity-60">{isAr ? 'سند قبض وصرف / فواتير كاشير' : 'POS Receipts & Vouchers'}</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setLayout('a4');
+                  setZoom(70);
+                }}
+                className={`p-3 rounded-xl border text-[11px] font-bold transition flex flex-col items-center gap-1 cursor-pointer ${
+                  layout === 'a4'
+                    ? 'bg-indigo-600/10 border-indigo-500 text-indigo-400'
+                    : 'border-slate-800 bg-slate-900/30 text-slate-500 hover:border-slate-700 hover:text-slate-400'
+                }`}
+              >
+                <span className="font-extrabold text-xs">Standard A4</span>
+                <span className="text-[8px] opacity-60">{isAr ? 'تقارير وفواتير ضريبية مفصلة' : 'Detailed Invoices & Reports'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Section: Formatting options */}
+          <div className="grid grid-cols-2 gap-3 pt-1">
+            <div className="space-y-1.5">
+              <label className="text-[9px] font-bold text-slate-400 uppercase block">
+                {isAr ? 'عدد النسخ المطلوبة' : 'Number of Copies'}
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="10"
+                value={copies}
+                onChange={(e) => setCopies(Math.max(1, parseInt(e.target.value) || 1))}
+                className="w-full bg-slate-900 text-center text-xs font-bold text-white p-2 rounded-lg border border-slate-800 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[9px] font-bold text-slate-400 uppercase block">
+                {isAr ? 'اتجاه الورقة' : 'Page Orientation'}
+              </label>
+              <select
+                value={orientation}
+                onChange={(e) => setOrientation(e.target.value as any)}
+                className="w-full bg-slate-900 text-xs font-bold text-slate-300 p-2 rounded-lg border border-slate-800 focus:outline-none"
+              >
+                <option value="portrait" className="bg-slate-950 text-white">{isAr ? 'طولي / Portrait' : 'Portrait'}</option>
+                <option value="landscape" className="bg-slate-950 text-white">{isAr ? 'عرضي / Landscape' : 'Landscape'}</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Color Mode Option */}
+          <div className="space-y-1.5">
+            <label className="text-[9px] font-bold text-slate-400 uppercase block">
+              {isAr ? 'وضع الألوان للطباعة' : 'Color output mode'}
+            </label>
+            <div className="flex bg-slate-900 p-1 rounded-lg border border-slate-800 gap-1">
+              <button
+                onClick={() => setColorMode('color')}
+                className={`flex-1 text-[10px] font-bold py-1.5 px-2 rounded-md cursor-pointer transition ${
+                  colorMode === 'color' ? 'bg-indigo-600 text-white shadow-sm font-extrabold' : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                {isAr ? 'ألوان كاملة' : 'Full Color'}
+              </button>
+              <button
+                onClick={() => setColorMode('grayscale')}
+                className={`flex-1 text-[10px] font-bold py-1.5 px-2 rounded-md cursor-pointer transition ${
+                  colorMode === 'grayscale' ? 'bg-indigo-600 text-white shadow-sm font-extrabold' : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                {isAr ? 'تدرج الرمادي (توفير حبر)' : 'Grayscale (Ink Saver)'}
+              </button>
+            </div>
+          </div>
+
+          {/* Standard A4 Layout Adjustments Section */}
+          {layout === 'a4' && (
+            <div className="space-y-4 p-3 bg-slate-900/50 rounded-2xl border border-slate-800/80 mt-1">
+              <label className="text-[10px] font-extrabold text-indigo-400 uppercase tracking-wider block">
+                {isAr ? 'ضبط هوامش ومقاييس A4' : 'A4 Margin & Scale Controls'}
+              </label>
+
+              {/* Page Margins Selector */}
+              <div className="space-y-1.5">
+                <label className="text-[9px] font-bold text-slate-400 uppercase block">
+                  {isAr ? 'هوامش الورقة' : 'Page Margins'}
+                </label>
+                <div className="grid grid-cols-4 gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+                  {(['none', 'narrow', 'normal', 'wide'] as const).map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setMargins(m)}
+                      className={`text-[9px] font-bold py-1 px-0.5 rounded cursor-pointer transition text-center ${
+                        margins === m ? 'bg-indigo-600 text-white shadow-sm font-extrabold' : 'text-slate-500 hover:text-slate-300'
+                      }`}
+                    >
+                      {m === 'none' ? (isAr ? 'بدون' : 'None') :
+                       m === 'narrow' ? (isAr ? 'ضيقة' : 'Narrow') :
+                       m === 'normal' ? (isAr ? 'طبيعية' : 'Normal') :
+                       (isAr ? 'واسعة' : 'Wide')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Content Scaling Slider */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center text-[9px] font-bold text-slate-400">
+                  <span>{isAr ? 'مقياس حجم الفاتورة في الصفحة' : 'Invoice Content Scale'}</span>
+                  <span className="font-mono text-indigo-400 font-extrabold">{contentScale}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="85"
+                  max="140"
+                  step="5"
+                  value={contentScale}
+                  onChange={(e) => setContentScale(parseInt(e.target.value))}
+                  className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                />
+                <div className="flex justify-between text-[8px] text-slate-600 font-bold px-0.5">
+                  <span>{isAr ? 'مضغوطة (85%)' : 'Compact (85%)'}</span>
+                  <span>{isAr ? 'افتراضي (110%)' : 'Default (110%)'}</span>
+                  <span>{isAr ? 'تكبير (140%)' : 'Large (140%)'}</span>
+                </div>
+              </div>
+
+              {/* Horizontal Alignment */}
+              <div className="space-y-1.5">
+                <label className="text-[9px] font-bold text-slate-400 uppercase block">
+                  {isAr ? 'محاذاة الفاتورة أفقياً' : 'Invoice Horizontal Alignment'}
+                </label>
+                <div className="grid grid-cols-3 gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+                  {(['left', 'center', 'right'] as const).map((align) => (
+                    <button
+                      key={align}
+                      onClick={() => setAlignment(align)}
+                      className={`text-[9px] font-bold py-1 px-1 rounded cursor-pointer transition text-center ${
+                        alignment === align ? 'bg-indigo-600 text-white shadow-sm font-extrabold' : 'text-slate-500 hover:text-slate-300'
+                      }`}
+                    >
+                      {align === 'left' ? (isAr ? 'يسار / Left' : 'Left') :
+                       align === 'center' ? (isAr ? 'توسيط / Center' : 'Center') :
+                       (isAr ? 'يمين / Right' : 'Right')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Sidebar Footer with Trigger Buttons */}
+        <div className="p-5 border-t border-slate-800 bg-slate-950/90 space-y-2.5">
+          <button
+            onClick={handlePrint}
+            disabled={isPrinting}
+            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-3 px-4 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/10 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none"
+          >
+            {isPrinting ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                <span>{isAr ? 'جاري معالجة وإرسال الأمر...' : 'Processing print command...'}</span>
+              </>
+            ) : (
+              <>
+                <Printer className="w-4.5 h-4.5" />
+                <span>
+                  {printMode === 'silent' 
+                    ? (isAr ? 'ابدأ الطباعة المباشرة السريعة' : 'Start Fast Direct Print') 
+                    : printMode === 'pdf'
+                      ? (isAr ? 'تصدير وحفظ ملف PDF الآن' : 'Save & Export PDF file')
+                      : (isAr ? 'تشغيل واجهة المعاينة والطباعة' : 'Launch System Print Dialog')
+                  }
+                </span>
+              </>
+            )}
+          </button>
+          
+          <button
+            onClick={onClose}
+            disabled={isPrinting}
+            className="w-full bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800 font-bold py-2.5 px-4 rounded-xl text-xs transition cursor-pointer"
+          >
+            {isAr ? 'إلغاء المعاينة والرجوع' : 'Cancel & Back'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

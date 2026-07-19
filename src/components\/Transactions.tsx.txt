@@ -1,0 +1,645 @@
+import React, { useState, useMemo } from 'react';
+import { Product, Transaction, TransactionType } from '../types';
+import { translations, Language } from '../utils/translations';
+import { 
+  ArrowUpRight, 
+  ArrowDownLeft, 
+  Plus, 
+  Calendar, 
+  FileText, 
+  DollarSign, 
+  Search, 
+  Printer, 
+  History, 
+  Tag,
+  X,
+  Share2,
+  Trash2,
+  Info
+} from 'lucide-react';
+
+interface TransactionsProps {
+  products: Product[];
+  transactions: Transaction[];
+  language: Language;
+  onAddTransaction: (transaction: Omit<Transaction, 'id'>) => void;
+  onDeleteTransaction: (id: string) => void;
+  currencySymbol?: string;
+}
+
+export default function Transactions({
+  products,
+  transactions,
+  language,
+  onAddTransaction,
+  onDeleteTransaction,
+  currencySymbol = language === 'ar' ? 'ج.م' : '$'
+}: TransactionsProps) {
+  const t = translations[language];
+  const isRtl = language === 'ar';
+
+  // State for showing transaction detail modal
+  const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
+
+  // State to toggle log form expansion
+  const [isFormOpen, setIsFormOpen] = useState(false);
+
+  // Form Fields State
+  const [selectedProductId, setSelectedProductId] = useState('');
+  const [txType, setTxType] = useState<TransactionType>('IN');
+  const [txQty, setTxQty] = useState(1);
+  const [txPrice, setTxPrice] = useState(0);
+  const [txNotes, setTxNotes] = useState('');
+  const [txDate, setTxDate] = useState(new Date().toISOString().slice(0, 16)); // YYYY-MM-DDTHH:MM
+
+  // Search/Filter State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState<'ALL' | 'IN' | 'OUT'>('ALL');
+
+  // Autofill unit price based on product selection
+  const handleProductChange = (id: string) => {
+    setSelectedProductId(id);
+    const selectedProd = products.find(p => p.id === id);
+    if (selectedProd) {
+      // If Stock IN, default to Cost Price. If Stock OUT, default to Selling Price.
+      setTxPrice(txType === 'IN' ? selectedProd.costPrice : selectedProd.sellingPrice);
+    }
+  };
+
+  const handleTypeChange = (type: TransactionType) => {
+    setTxType(type);
+    const selectedProd = products.find(p => p.id === selectedProductId);
+    if (selectedProd) {
+      setTxPrice(type === 'IN' ? selectedProd.costPrice : selectedProd.sellingPrice);
+    }
+  };
+
+  // Submit transaction
+  const handleSubmitTx = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProductId) {
+      alert('Please select a product!');
+      return;
+    }
+    if (txQty <= 0) {
+      alert('Quantity must be greater than 0!');
+      return;
+    }
+
+    const selectedProd = products.find(p => p.id === selectedProductId);
+    if (txType === 'OUT' && selectedProd && selectedProd.quantity < txQty) {
+      const confirmProceed = window.confirm(
+        language === 'ar' 
+          ? `⚠️ تحذير: الكمية المطلوبة للبيع (${txQty}) أكبر من المتوفر حالياً في المخزن (${selectedProd.quantity}). هل تريد إكمال العملية بالسالب؟`
+          : `⚠️ Warning: Outgoing quantity (${txQty}) exceeds current available stock (${selectedProd.quantity}). Do you want to force negative stock?`
+      );
+      if (!confirmProceed) return;
+    }
+
+    onAddTransaction({
+      productId: selectedProductId,
+      type: txType,
+      quantity: Number(txQty),
+      unitPrice: Number(txPrice),
+      date: new Date(txDate).toISOString(),
+      notes: txNotes.trim() || undefined
+    });
+
+    // Reset form states
+    setTxQty(1);
+    setTxNotes('');
+    setIsFormOpen(false);
+  };
+
+  // Create a high-speed O(1) product lookup map stored in memory
+  const productsMap = useMemo(() => {
+    return new Map(products.map(p => [p.id, p]));
+  }, [products]);
+
+  // Filter transaction records
+  const filteredTransactions = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    
+    // Direct pre-filtering & Map lookup O(N) instead of nested loops O(N*M)
+    return transactions
+      .filter(tx => {
+        const prod = productsMap.get(tx.productId);
+        const matchesSearch = !query || (prod 
+          ? prod.name.toLowerCase().includes(query) || prod.code.toLowerCase().includes(query)
+          : false);
+
+        const matchesType = typeFilter === 'ALL' || tx.type === typeFilter;
+        return matchesSearch && matchesType;
+      })
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [transactions, productsMap, searchQuery, typeFilter]);
+
+  // Aggregate stats on current filtered dataset
+  const datasetStats = useMemo(() => {
+    let totalInQty = 0;
+    let totalOutQty = 0;
+    let totalInValue = 0;
+    let totalOutValue = 0;
+
+    filteredTransactions.forEach(tx => {
+      const amount = tx.quantity * tx.unitPrice;
+      if (tx.type === 'IN') {
+        totalInQty += tx.quantity;
+        totalInValue += amount;
+      } else {
+        totalOutQty += tx.quantity;
+        totalOutValue += amount;
+      }
+    });
+
+    return {
+      totalInQty,
+      totalOutQty,
+      totalInValue,
+      totalOutValue
+    };
+  }, [filteredTransactions]);
+
+  const handlePrintLedger = () => {
+    window.print();
+  };
+
+  return (
+    <div className="space-y-6" dir={isRtl ? 'rtl' : 'ltr'}>
+      {/* Title & Quick Actions */}
+      <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-black text-slate-800 font-sans tracking-tight">
+            {t.transactions}
+          </h2>
+          <p className="text-xs text-slate-400 mt-1 font-semibold">
+            {language === 'ar' ? 'سجل عمليات التوريد للشراء والمبيعات للعملاء' : 'Track incoming purchases and outgoing sales operations'}
+          </p>
+        </div>
+
+        <div className="flex gap-2 shrink-0">
+          <button
+            id="btn-toggle-tx-form"
+            onClick={() => setIsFormOpen(!isFormOpen)}
+            className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-md shadow-indigo-600/10 transition cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            {t.logMovement}
+          </button>
+
+          <button
+            id="btn-print-ledger"
+            onClick={handlePrintLedger}
+            className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-xl text-xs font-bold transition no-print cursor-pointer"
+          >
+            <Printer className="w-4 h-4" />
+            {t.printReceipt}
+          </button>
+        </div>
+      </div>
+
+      {/* --- SECTION 1: LOG NEW MOVEMENT FORM --- */}
+      {isFormOpen && (
+        <div className="bg-white p-6 rounded-2xl border border-indigo-100 shadow-lg space-y-4 animate-in fade-in zoom-in duration-200">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+              <Tag className="w-4 h-4 text-indigo-500" />
+              {t.logMovement}
+            </h3>
+            <button 
+              onClick={() => setIsFormOpen(false)}
+              className="text-xs text-slate-400 hover:text-slate-600 font-bold cursor-pointer"
+            >
+              {t.cancel}
+            </button>
+          </div>
+
+          <form onSubmit={handleSubmitTx} className="grid grid-cols-1 md:grid-cols-12 gap-4">
+            {/* Product selection */}
+            <div className="md:col-span-4">
+              <label className="block text-xs font-bold text-slate-600 mb-1">{t.productSelected} *</label>
+              <select
+                required
+                value={selectedProductId}
+                onChange={(e) => handleProductChange(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-550 text-slate-700 font-semibold"
+              >
+                <option value="">{language === 'ar' ? '— اختر المنتج من المخزن —' : '— Select Product —'}</option>
+                {products.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.code}) — {language === 'ar' ? 'متوفر' : 'Stock'}: {p.quantity}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Inward vs Outward */}
+            <div className="md:col-span-2">
+              <label className="block text-xs font-bold text-slate-600 mb-1">{t.txType} *</label>
+              <select
+                value={txType}
+                onChange={(e) => handleTypeChange(e.target.value as TransactionType)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-550 text-slate-700 font-bold"
+              >
+                <option value="IN">IN</option>
+                <option value="OUT">OUT</option>
+              </select>
+            </div>
+
+            {/* Quantity */}
+            <div className="md:col-span-2">
+              <label className="block text-xs font-bold text-slate-600 mb-1">{t.quantity} *</label>
+              <input 
+                type="number"
+                min="1"
+                required
+                value={txQty}
+                onChange={(e) => setTxQty(Number(e.target.value))}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-550 text-slate-700 font-bold"
+              />
+            </div>
+
+            {/* Custom Unit Price */}
+            <div className="md:col-span-2">
+              <label className="block text-xs font-bold text-slate-600 mb-1">{t.txPrice} ($)</label>
+              <input 
+                type="number"
+                step="0.01"
+                min="0"
+                value={txPrice}
+                onChange={(e) => setTxPrice(Number(e.target.value))}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-550 text-slate-700 font-bold"
+              />
+            </div>
+
+            {/* Transaction Date */}
+            <div className="md:col-span-2">
+              <label className="block text-xs font-bold text-slate-600 mb-1">{t.txDate}</label>
+              <input 
+                type="datetime-local"
+                value={txDate}
+                onChange={(e) => setTxDate(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-550 text-slate-700 font-semibold"
+              />
+            </div>
+
+            {/* Notes */}
+            <div className="md:col-span-10">
+              <label className="block text-xs font-bold text-slate-600 mb-1">{t.notes}</label>
+              <input 
+                type="text"
+                placeholder="e.g. Bill #12093, Supplier shipment index, client name"
+                value={txNotes}
+                onChange={(e) => setTxNotes(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-550 text-slate-700"
+              />
+            </div>
+
+            {/* Submit Button */}
+            <div className="md:col-span-2 flex items-end">
+              <button
+                type="submit"
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-2 px-3 rounded-xl shadow-md shadow-emerald-600/10 transition cursor-pointer"
+              >
+                {t.addTx}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* --- SECTION 2: STATS SUMMARY BAR --- */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-200/60 shadow-3xs">
+        <div className="space-y-0.5">
+          <p className="text-[10px] font-bold text-slate-400 uppercase">{language === 'ar' ? 'إجمالي القطع الواردة' : 'Total Items In'}</p>
+          <p className="text-sm font-black text-emerald-600 font-mono">+{datasetStats.totalInQty} pcs</p>
+        </div>
+        <div className="space-y-0.5">
+          <p className="text-[10px] font-bold text-slate-400 uppercase">{language === 'ar' ? 'تكلفة المشتريات / الوارد' : 'Purchasing Value'}</p>
+          <p className="text-sm font-black text-slate-700 font-mono">${datasetStats.totalInValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+        </div>
+        <div className="space-y-0.5">
+          <p className="text-[10px] font-bold text-slate-400 uppercase">{language === 'ar' ? 'إجمالي القطع الصادرة' : 'Total Items Out'}</p>
+          <p className="text-sm font-black text-amber-600 font-mono">-{datasetStats.totalOutQty} pcs</p>
+        </div>
+        <div className="space-y-0.5">
+          <p className="text-[10px] font-bold text-slate-400 uppercase">{language === 'ar' ? 'قيمة المبيعات / الصادر' : 'Sales Revenue'}</p>
+          <p className="text-sm font-black text-indigo-700 font-mono">${datasetStats.totalOutValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+        </div>
+      </div>
+
+      {/* Searching & Filtering Logs */}
+      <div className="bg-white p-4 rounded-2xl border border-slate-200/60 shadow-xs flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1">
+          <Search className={`absolute top-2.5 w-4 h-4 text-slate-400 ${isRtl ? 'right-3' : 'left-3'}`} />
+          <input 
+            type="text" 
+            placeholder={t.searchPlaceholder}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className={`w-full bg-slate-50 border border-slate-200/60 rounded-xl py-2 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 ${isRtl ? 'pr-9 pl-3' : 'pl-9 pr-3'}`}
+          />
+        </div>
+
+        <div className="w-full sm:w-48">
+          <select
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value as any)}
+            className="w-full bg-slate-50 border border-slate-200/60 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 font-semibold"
+          >
+            <option value="ALL">📋 {language === 'ar' ? 'جميع حركات المخزن' : 'All Movements'}</option>
+            <option value="IN">📥 {t.stockIn}</option>
+            <option value="OUT">📤 {t.stockOut}</option>
+          </select>
+        </div>
+      </div>
+
+      {/* --- SECTION 3: TRANSACTION LOG TABLE --- */}
+      <div className="bg-white rounded-2xl border border-slate-200/60 shadow-xs overflow-hidden">
+        <div className="p-4 border-b border-slate-100 flex items-center gap-2">
+          <History className="w-4 h-4 text-indigo-500" />
+          <h3 className="font-bold text-slate-800 text-xs uppercase tracking-wider">{t.txHistory}</h3>
+        </div>
+        
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs text-slate-650 border-collapse">
+            <thead className="bg-[#1e293b] text-slate-200 font-bold border-b border-slate-800 uppercase text-[10px]">
+              <tr>
+                <th className={`p-4 ${isRtl ? 'text-right' : 'text-left'}`}>{t.sku}</th>
+                <th className={`p-4 ${isRtl ? 'text-right' : 'text-left'}`}>{t.productName}</th>
+                <th className="p-4 text-center">{t.txType}</th>
+                <th className={`p-4 ${isRtl ? 'text-right' : 'text-left'}`}>{t.quantity}</th>
+                <th className={`p-4 ${isRtl ? 'text-right' : 'text-left'}`}>{t.txPrice}</th>
+                <th className={`p-4 ${isRtl ? 'text-right' : 'text-left'}`}>{language === 'ar' ? 'المجموع الإجمالي' : 'Total Value'}</th>
+                <th className={`p-4 ${isRtl ? 'text-right' : 'text-left'}`}>{t.txDate}</th>
+                <th className={`p-4 ${isRtl ? 'text-right' : 'text-left'}`}>{t.notes}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filteredTransactions.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="p-8 text-center text-slate-400">
+                    {t.noData}
+                  </td>
+                </tr>
+              ) : (
+                filteredTransactions.map(tx => {
+                  const prod = products.find(p => p.id === tx.productId);
+                  const total = tx.quantity * tx.unitPrice;
+                  const dateObj = new Date(tx.date);
+                  const formattedDate = dateObj.toLocaleDateString(language === 'ar' ? 'ar-EG' : 'en-US', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  });
+
+                  return (
+                    <tr 
+                      key={tx.id} 
+                      onClick={() => setSelectedTx(tx)}
+                      className="hover:bg-indigo-50/50 transition-colors cursor-pointer"
+                    >
+                      {/* Product SKU */}
+                      <td className="p-4 font-mono font-bold text-slate-800">
+                        {prod ? (
+                          <span className="bg-slate-100 px-2 py-1 rounded border border-slate-200">
+                            {prod.code}
+                          </span>
+                        ) : (
+                          <span className="text-red-500 font-medium">{language === 'ar' ? 'منتج محذوف' : 'Deleted Product'}</span>
+                        )}
+                      </td>
+
+                      {/* Product Name */}
+                      <td className={`p-4 font-bold text-slate-900 ${isRtl ? 'text-right' : 'text-left'}`}>
+                        {prod ? prod.name : '—'}
+                      </td>
+
+                      {/* Type Badge */}
+                      <td className="p-4 text-center">
+                        {tx.type === 'IN' ? (
+                          <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full font-bold text-[10px]">
+                            <ArrowUpRight className="w-3 h-3 text-emerald-500" />
+                            {t.stockIn}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 bg-amber-105 text-amber-800 px-2.5 py-1 rounded-full font-bold text-[10px]">
+                            <ArrowDownLeft className="w-3 h-3 text-amber-500" />
+                            {t.stockOut}
+                          </span>
+                        )}
+                      </td>
+
+                      {/* Quantity */}
+                      <td className={`p-4 font-black font-mono text-slate-800 ${isRtl ? 'text-right' : 'text-left'}`}>
+                        {tx.type === 'IN' ? '+' : '-'}{tx.quantity}
+                      </td>
+
+                      {/* Unit Price */}
+                      <td className={`p-4 font-mono font-semibold text-slate-600 ${isRtl ? 'text-right' : 'text-left'}`}>
+                        {currencySymbol}{tx.unitPrice.toFixed(2)}
+                      </td>
+
+                      {/* Total cost */}
+                      <td className={`p-4 font-mono font-bold text-slate-900 ${isRtl ? 'text-right' : 'text-left'}`}>
+                        {currencySymbol}{total.toFixed(2)}
+                      </td>
+
+                      {/* Date */}
+                      <td className={`p-4 text-slate-500 font-medium text-[10px] ${isRtl ? 'text-right' : 'text-left'}`}>
+                        {formattedDate}
+                      </td>
+
+                      {/* Notes */}
+                      <td className={`p-4 text-slate-500 font-semibold max-w-[180px] truncate ${isRtl ? 'text-right' : 'text-left'}`} title={tx.notes}>
+                        {tx.notes || <span className="text-slate-300">—</span>}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* --- TRANSACTION DETAILS & PRINT/SHARE MODAL --- */}
+      {selectedTx && (() => {
+        const prod = products.find(p => p.id === selectedTx.productId);
+        const total = selectedTx.quantity * selectedTx.unitPrice;
+        const formattedDate = new Date(selectedTx.date).toLocaleString(language === 'ar' ? 'ar-EG' : 'en-US', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+
+        const shareTxDetails = () => {
+          const text = language === 'ar'
+            ? `📝 *تقرير تفاصيل حركة المخزن*:\n` +
+              `-------------------------\n` +
+              `• كود المنتج: ${prod ? prod.code : 'N/A'}\n` +
+              `• اسم المنتج: ${prod ? prod.name : 'N/A'}\n` +
+              `• نوع الحركة: ${selectedTx.type === 'IN' ? 'وارد / شراء 📥' : 'صادر / مبيعات 📤'}\n` +
+              `• الكمية: ${selectedTx.quantity} قطعة\n` +
+              `• سعر الوحدة: ${currencySymbol}${selectedTx.unitPrice.toFixed(2)}\n` +
+              `• الإجمالي الكلي: ${currencySymbol}${total.toFixed(2)}\n` +
+              `• التاريخ والوقت: ${formattedDate}\n` +
+              `• ملاحظات: ${selectedTx.notes || 'لا يوجد'}\n` +
+              `-------------------------\n` +
+              `تم الإنشاء عبر نظام مبيعات ومخازن ERP Hub`
+            : `📝 *Transaction Details Report*:\n` +
+              `-------------------------\n` +
+              `• SKU/Code: ${prod ? prod.code : 'N/A'}\n` +
+              `• Product: ${prod ? prod.name : 'N/A'}\n` +
+              `• Type: ${selectedTx.type === 'IN' ? 'Stock IN 📥' : 'Stock OUT 📤'}\n` +
+              `• Quantity: ${selectedTx.quantity} pcs\n` +
+              `• Unit Price: ${currencySymbol}${selectedTx.unitPrice.toFixed(2)}\n` +
+              `• Total Value: ${currencySymbol}${total.toFixed(2)}\n` +
+              `• Date & Time: ${formattedDate}\n` +
+              `• Notes: ${selectedTx.notes || 'None'}\n` +
+              `-------------------------\n` +
+              `Generated via ERP Hub System`;
+
+          if (navigator.share) {
+            navigator.share({
+              title: language === 'ar' ? 'تقرير حركة مخزنية' : 'Transaction Report',
+              text: text
+            }).catch(() => {
+              navigator.clipboard.writeText(text);
+              alert(language === 'ar' ? 'تم نسخ التفاصيل للحافظة لمشاركتها!' : 'Details copied to clipboard for sharing!');
+            });
+          } else {
+            navigator.clipboard.writeText(text);
+            alert(language === 'ar' ? 'تم نسخ التفاصيل للحافظة لمشاركتها!' : 'Details copied to clipboard for sharing!');
+          }
+        };
+
+        return (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200 no-print">
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200">
+              {/* Header */}
+              <div className="bg-slate-900 text-white p-5 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-slate-800 rounded-xl text-indigo-400">
+                    <Info className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-sm text-slate-100">
+                      {language === 'ar' ? 'تفاصيل السجل الحركي للمخزن' : 'Store Movement Record'}
+                    </h3>
+                    <p className="text-[10px] text-slate-400 mt-0.5">ID: {selectedTx.id}</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setSelectedTx(null)}
+                  className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Printable Area Wrapper */}
+              <div id="printable-tx-card" className="p-6 space-y-5">
+                {/* Product Meta */}
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-150 flex items-center justify-between">
+                  <div>
+                    <span className="text-[9px] text-slate-400 font-bold uppercase block">{language === 'ar' ? 'المنتج المستهدف' : 'Target Product'}</span>
+                    <h4 className="font-extrabold text-sm text-slate-800 mt-0.5">{prod ? prod.name : '—'}</h4>
+                  </div>
+                  {prod && (
+                    <span className="bg-indigo-100 border border-indigo-200 text-indigo-700 font-mono font-bold text-xs px-2.5 py-1 rounded-lg">
+                      {prod.code}
+                    </span>
+                  )}
+                </div>
+
+                {/* Details Grid */}
+                <div className="grid grid-cols-2 gap-4 text-xs font-semibold">
+                  <div>
+                    <span className="text-slate-400 font-bold block mb-0.5">{language === 'ar' ? 'نوع حركة المخزون' : 'Movement Type'}</span>
+                    {selectedTx.type === 'IN' ? (
+                      <span className="inline-flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded font-bold">
+                        {language === 'ar' ? 'توريد / شراء (IN)' : 'Supply Purchase (IN)'}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-amber-600 bg-amber-50 px-2 py-0.5 rounded font-bold">
+                        {language === 'ar' ? 'تصدير / مبيع (OUT)' : 'Customer Sale (OUT)'}
+                      </span>
+                    )}
+                  </div>
+
+                  <div>
+                    <span className="text-slate-400 font-bold block mb-0.5">{language === 'ar' ? 'الكمية الحركية' : 'Quantity Adjusted'}</span>
+                    <span className="text-slate-800 font-black font-mono text-sm">{selectedTx.quantity} pcs</span>
+                  </div>
+
+                  <div>
+                    <span className="text-slate-400 font-bold block mb-0.5">{language === 'ar' ? 'سعر الوحدة الافتراضي' : 'Unit Price'}</span>
+                    <span className="text-slate-850 font-black font-mono">{currencySymbol}{selectedTx.unitPrice.toFixed(2)}</span>
+                  </div>
+
+                  <div>
+                    <span className="text-slate-400 font-bold block mb-0.5">{language === 'ar' ? 'القيمة الإجمالية للطلب' : 'Total Value'}</span>
+                    <span className="text-indigo-600 font-black font-mono text-sm">{currencySymbol}{total.toFixed(2)}</span>
+                  </div>
+
+                  <div className="col-span-2">
+                    <span className="text-slate-400 font-bold block mb-0.5">{language === 'ar' ? 'تاريخ ووقت الحركة' : 'Creation Timestamp'}</span>
+                    <span className="text-slate-700 font-bold">{formattedDate}</span>
+                  </div>
+
+                  {selectedTx.notes && (
+                    <div className="col-span-2 bg-slate-50/50 border border-slate-150 p-3 rounded-xl">
+                      <span className="text-slate-400 font-bold block mb-1">{language === 'ar' ? 'ملاحظات المعاملة' : 'Transaction Notes'}</span>
+                      <p className="text-slate-750 text-xs italic font-medium">{selectedTx.notes}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="bg-slate-50 p-4 border-t border-slate-100 flex flex-wrap gap-2 justify-between">
+                <button
+                  onClick={() => {
+                    if (window.confirm(language === 'ar' ? '🚨 تحذير: هل تريد حذف هذه الحركة المخزنية وعكس تأثيرها على المخزون بالكامل؟' : '🚨 Warning: Do you want to delete this log movement and reverse its stock quantity impact completely?')) {
+                      onDeleteTransaction(selectedTx.id);
+                      setSelectedTx(null);
+                    }
+                  }}
+                  className="flex items-center gap-1.5 bg-red-50 hover:bg-red-100 text-red-600 px-3.5 py-2 rounded-xl text-xs font-bold border border-red-200 transition cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  {language === 'ar' ? 'حذف الحركة وعكس الكمية' : 'Delete & Reverse'}
+                </button>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={shareTxDetails}
+                    className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer"
+                  >
+                    <Share2 className="w-4 h-4" />
+                    {language === 'ar' ? 'مشاركة' : 'Share'}
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      window.print();
+                    }}
+                    className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-2 rounded-xl text-xs font-bold shadow-md shadow-indigo-600/10 transition cursor-pointer"
+                  >
+                    <Printer className="w-4 h-4" />
+                    {language === 'ar' ? 'طباعة تفصيلية' : 'Print Receipt'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}

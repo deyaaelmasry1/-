@@ -1,0 +1,283 @@
+import React, { useMemo, useState } from 'react';
+import {
+  Product, Category, Supplier, Customer, Warehouse, Transaction,
+  Expense, FinancialVoucher, Invoice
+} from '../types';
+import { Language } from '../utils/translations';
+import { printHtml } from '../utils/printHelper';
+import { Search, Filter, FileSpreadsheet, FileText, Printer, Share2, Pencil, Trash2, RefreshCw, X } from 'lucide-react';
+
+type RecordKind =
+  | 'products' | 'suppliers' | 'customers' | 'warehouses' | 'debts'
+  | 'movements' | 'low_stock' | 'profits' | 'sales' | 'purchases'
+  | 'expenses' | 'statements';
+
+type Row = {
+  id: string;
+  source: 'product' | 'supplier' | 'customer' | 'warehouse' | 'transaction' | 'expense' | 'voucher' | 'invoice' | 'derived';
+  sourceId: string;
+  date?: string;
+  productId?: string;
+  customerId?: string;
+  supplierId?: string;
+  categoryId?: string;
+  warehouseId?: string;
+  values: Record<string, string | number>;
+};
+
+interface Props {
+  products: Product[]; setProducts: React.Dispatch<React.SetStateAction<Product[]>>;
+  categories: Category[];
+  suppliers: Supplier[]; setSuppliers: React.Dispatch<React.SetStateAction<Supplier[]>>;
+  customers: Customer[]; setCustomers: React.Dispatch<React.SetStateAction<Customer[]>>;
+  warehouses: Warehouse[]; setWarehouses: React.Dispatch<React.SetStateAction<Warehouse[]>>;
+  transactions: Transaction[]; setTransactions: React.Dispatch<React.SetStateAction<Transaction[]>>;
+  expenses: Expense[]; setExpenses: React.Dispatch<React.SetStateAction<Expense[]>>;
+  vouchers: FinancialVoucher[]; setVouchers: React.Dispatch<React.SetStateAction<FinancialVoucher[]>>;
+  invoices: Invoice[]; setInvoices: React.Dispatch<React.SetStateAction<Invoice[]>>;
+  language: Language;
+  companyName: string;
+  currencySymbol: string;
+}
+
+const kinds: Array<{ id: RecordKind; ar: string; en: string }> = [
+  { id: 'products', ar: 'سجل المنتجات والكتالوج', en: 'Products & Catalog' },
+  { id: 'suppliers', ar: 'سجل الموردين', en: 'Suppliers' },
+  { id: 'customers', ar: 'سجل العملاء', en: 'Customers' },
+  { id: 'warehouses', ar: 'سجل المخازن', en: 'Warehouses' },
+  { id: 'debts', ar: 'سجل الديون والمستحقات', en: 'Debts & Receivables' },
+  { id: 'movements', ar: 'سجل حركات المنتجات', en: 'Product Movements' },
+  { id: 'low_stock', ar: 'سجل المنتجات المنخفضة', en: 'Low Stock' },
+  { id: 'profits', ar: 'سجل الأرباح والخسائر', en: 'Profit & Loss' },
+  { id: 'sales', ar: 'سجل المبيعات', en: 'Sales' },
+  { id: 'purchases', ar: 'سجل المشتريات', en: 'Purchases' },
+  { id: 'expenses', ar: 'سجل المصروفات', en: 'Expenses' },
+  { id: 'statements', ar: 'كشف حساب العملاء والموردين', en: 'Customer & Supplier Statements' },
+];
+
+const esc = (v: unknown) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+export default function RecordsSection(props: Props) {
+  const { language, currencySymbol } = props;
+  const ar = language === 'ar';
+  const [kind, setKind] = useState<RecordKind>('products');
+  const [query, setQuery] = useState('');
+  const [productId, setProductId] = useState('');
+  const [customerId, setCustomerId] = useState('');
+  const [supplierId, setSupplierId] = useState('');
+  const [categoryId, setCategoryId] = useState('');
+  const [warehouseId, setWarehouseId] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [editRow, setEditRow] = useState<Row | null>(null);
+  const [editValues, setEditValues] = useState<Record<string, string>>({});
+
+  const nameOfProduct = (id?: string) => props.products.find(x => String(x.id) === String(id))?.name || '-';
+  const nameOfCustomer = (id?: string) => props.customers.find(x => String(x.id) === String(id))?.name || '-';
+  const nameOfSupplier = (id?: string) => props.suppliers.find(x => String(x.id) === String(id))?.name || '-';
+  const nameOfWarehouse = (id?: string) => props.warehouses.find(x => String(x.id) === String(id))?.name || '-';
+  const nameOfCategory = (id?: string) => props.categories.find(x => String(x.id) === String(id))?.name || '-';
+
+  const rows = useMemo<Row[]>(() => {
+    switch (kind) {
+      case 'products':
+        return props.products.map(p => ({ id: `p-${p.id}`, source: 'product', sourceId: p.id, productId: p.id, categoryId: p.categoryId, supplierId: p.supplierId, warehouseId: p.warehouseId, values: {
+          [ar ? 'الكود' : 'Code']: p.code, [ar ? 'المنتج' : 'Product']: p.name, [ar ? 'الفئة' : 'Category']: nameOfCategory(p.categoryId),
+          [ar ? 'المخزن' : 'Warehouse']: nameOfWarehouse(p.warehouseId), [ar ? 'المورد' : 'Supplier']: nameOfSupplier(p.supplierId),
+          [ar ? 'الكمية' : 'Qty']: p.quantity, [ar ? 'حد الطلب' : 'Min Qty']: p.minQuantity,
+          [ar ? 'التكلفة' : 'Cost']: p.costPrice, [ar ? 'سعر البيع' : 'Sale Price']: p.sellingPrice,
+        }}));
+      case 'suppliers':
+        return props.suppliers.map(s => ({ id: `s-${s.id}`, source: 'supplier', sourceId: s.id, supplierId: s.id, values: {
+          [ar ? 'المورد' : 'Supplier']: s.name, [ar ? 'الشركة' : 'Company']: s.company || '-', [ar ? 'الهاتف' : 'Phone']: s.phone || '-',
+          [ar ? 'البريد' : 'Email']: s.email || '-', [ar ? 'العنوان' : 'Address']: s.address || '-', [ar ? 'الرصيد' : 'Balance']: s.balance || 0,
+        }}));
+      case 'customers':
+        return props.customers.map(c => ({ id: `c-${c.id}`, source: 'customer', sourceId: c.id, customerId: c.id, values: {
+          [ar ? 'العميل' : 'Customer']: c.name, [ar ? 'الهاتف' : 'Phone']: c.phone || '-', [ar ? 'البريد' : 'Email']: c.email || '-',
+          [ar ? 'العنوان' : 'Address']: c.address || '-', [ar ? 'الرصيد' : 'Balance']: c.balance || 0,
+        }}));
+      case 'warehouses':
+        return props.warehouses.map(w => ({ id: `w-${w.id}`, source: 'warehouse', sourceId: w.id, warehouseId: w.id, values: {
+          [ar ? 'المخزن' : 'Warehouse']: w.name, [ar ? 'الموقع' : 'Location']: w.location || '-',
+          [ar ? 'عدد المنتجات' : 'Products']: props.products.filter(p => String(p.warehouseId || '') === String(w.id)).length,
+          [ar ? 'إجمالي الكمية' : 'Total Qty']: props.products.filter(p => String(p.warehouseId || '') === String(w.id)).reduce((a, p) => a + p.quantity, 0),
+        }}));
+      case 'debts':
+        return [
+          ...props.customers.filter(c => c.balance !== 0).map(c => ({ id: `dc-${c.id}`, source: 'customer' as const, sourceId: c.id, customerId: c.id, values: {
+            [ar ? 'الطرف' : 'Party']: c.name, [ar ? 'النوع' : 'Type']: ar ? 'عميل' : 'Customer', [ar ? 'الهاتف' : 'Phone']: c.phone || '-', [ar ? 'الرصيد' : 'Balance']: c.balance,
+          }})),
+          ...props.suppliers.filter(s => (s.balance || 0) !== 0).map(s => ({ id: `ds-${s.id}`, source: 'supplier' as const, sourceId: s.id, supplierId: s.id, values: {
+            [ar ? 'الطرف' : 'Party']: s.name, [ar ? 'النوع' : 'Type']: ar ? 'مورد' : 'Supplier', [ar ? 'الهاتف' : 'Phone']: s.phone || '-', [ar ? 'الرصيد' : 'Balance']: s.balance || 0,
+          }})),
+        ];
+      case 'movements':
+        return props.transactions.map(t => ({ id: `t-${t.id}`, source: 'transaction', sourceId: t.id, date: t.date, productId: t.productId, customerId: t.customerId, supplierId: t.supplierId, warehouseId: t.warehouseId, values: {
+          [ar ? 'التاريخ' : 'Date']: t.date, [ar ? 'المنتج' : 'Product']: nameOfProduct(t.productId), [ar ? 'الحركة' : 'Movement']: t.type,
+          [ar ? 'الكمية' : 'Qty']: t.quantity, [ar ? 'سعر الوحدة' : 'Unit Price']: t.unitPrice, [ar ? 'المخزن' : 'Warehouse']: nameOfWarehouse(t.warehouseId),
+          [ar ? 'العميل' : 'Customer']: nameOfCustomer(t.customerId), [ar ? 'المورد' : 'Supplier']: nameOfSupplier(t.supplierId), [ar ? 'ملاحظات' : 'Notes']: t.notes || '-',
+        }}));
+      case 'low_stock':
+        return props.products.filter(p => p.quantity <= p.minQuantity).map(p => ({ id: `lp-${p.id}`, source: 'product', sourceId: p.id, productId: p.id, categoryId: p.categoryId, warehouseId: p.warehouseId, supplierId: p.supplierId, values: {
+          [ar ? 'المنتج' : 'Product']: p.name, [ar ? 'الكود' : 'Code']: p.code, [ar ? 'الكمية الحالية' : 'Current Qty']: p.quantity,
+          [ar ? 'حد الطلب' : 'Min Qty']: p.minQuantity, [ar ? 'العجز' : 'Shortage']: Math.max(0, p.minQuantity - p.quantity),
+          [ar ? 'المورد' : 'Supplier']: nameOfSupplier(p.supplierId), [ar ? 'المخزن' : 'Warehouse']: nameOfWarehouse(p.warehouseId),
+        }}));
+      case 'sales':
+        return props.invoices.map(i => ({ id: `i-${i.id}`, source: 'invoice', sourceId: i.id, date: i.date, customerId: i.customerId, values: {
+          [ar ? 'التاريخ' : 'Date']: i.date, [ar ? 'رقم الفاتورة' : 'Invoice']: i.invoiceNo || i.id, [ar ? 'العميل' : 'Customer']: i.customerName,
+          [ar ? 'الهاتف' : 'Phone']: i.customerPhone || '-', [ar ? 'الدفع' : 'Payment']: i.paymentMethod, [ar ? 'الأصناف' : 'Items']: i.items.length,
+          [ar ? 'الإجمالي' : 'Total']: i.total, [ar ? 'الخصم' : 'Discount']: i.discount,
+        }}));
+      case 'purchases':
+        return props.transactions.filter(t => t.type === 'IN' || t.type === 'PURCHASE_RETURN').map(t => ({ id: `pt-${t.id}`, source: 'transaction', sourceId: t.id, date: t.date, productId: t.productId, supplierId: t.supplierId, warehouseId: t.warehouseId, values: {
+          [ar ? 'التاريخ' : 'Date']: t.date, [ar ? 'المنتج' : 'Product']: nameOfProduct(t.productId), [ar ? 'النوع' : 'Type']: t.type,
+          [ar ? 'المورد' : 'Supplier']: nameOfSupplier(t.supplierId), [ar ? 'الكمية' : 'Qty']: t.quantity, [ar ? 'سعر الوحدة' : 'Unit Price']: t.unitPrice,
+          [ar ? 'الإجمالي' : 'Total']: t.quantity * t.unitPrice, [ar ? 'المخزن' : 'Warehouse']: nameOfWarehouse(t.warehouseId),
+        }}));
+      case 'expenses':
+        return props.expenses.map(e => ({ id: `e-${e.id}`, source: 'expense', sourceId: e.id, date: e.date, values: {
+          [ar ? 'التاريخ' : 'Date']: e.date, [ar ? 'المصروف' : 'Expense']: e.title, [ar ? 'الفئة' : 'Category']: e.category,
+          [ar ? 'المبلغ' : 'Amount']: e.amount, [ar ? 'ملاحظات' : 'Notes']: e.notes || '-',
+        }}));
+      case 'statements': {
+        const voucherRows = props.vouchers.map(v => ({ id: `v-${v.id}`, source: 'voucher' as const, sourceId: v.id, date: v.date, customerId: v.partyType === 'CUSTOMER' ? v.partyId : undefined, supplierId: v.partyType === 'SUPPLIER' ? v.partyId : undefined, values: {
+          [ar ? 'التاريخ' : 'Date']: v.date, [ar ? 'رقم السند' : 'Voucher']: v.voucherNumber, [ar ? 'الطرف' : 'Party']: v.partyType === 'CUSTOMER' ? nameOfCustomer(v.partyId) : v.partyType === 'SUPPLIER' ? nameOfSupplier(v.partyId) : (ar ? 'أخرى' : 'Other'),
+          [ar ? 'نوع الطرف' : 'Party Type']: v.partyType, [ar ? 'نوع السند' : 'Voucher Type']: v.type, [ar ? 'المبلغ' : 'Amount']: v.amount,
+          [ar ? 'طريقة الدفع' : 'Payment']: v.paymentMethod, [ar ? 'ملاحظات' : 'Notes']: v.notes || '-',
+        }}));
+        const invoiceRows = props.invoices.filter(i => i.customerId).map(i => ({ id: `si-${i.id}`, source: 'invoice' as const, sourceId: i.id, date: i.date, customerId: i.customerId, values: {
+          [ar ? 'التاريخ' : 'Date']: i.date, [ar ? 'المرجع' : 'Reference']: i.invoiceNo || i.id, [ar ? 'الطرف' : 'Party']: i.customerName,
+          [ar ? 'نوع الطرف' : 'Party Type']: ar ? 'عميل' : 'Customer', [ar ? 'الحركة' : 'Movement']: ar ? 'فاتورة مبيعات' : 'Sales Invoice', [ar ? 'مدين' : 'Debit']: i.total, [ar ? 'دائن' : 'Credit']: 0,
+        }}));
+        return [...voucherRows, ...invoiceRows].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      }
+      case 'profits': {
+        const saleRows = props.invoices.map(i => {
+          const cost = i.items.reduce((sum, item) => sum + (props.products.find(p => p.id === item.productId)?.costPrice || 0) * item.quantity, 0);
+          return { id: `pl-${i.id}`, source: 'invoice' as const, sourceId: i.id, date: i.date, customerId: i.customerId, values: {
+            [ar ? 'التاريخ' : 'Date']: i.date, [ar ? 'البيان' : 'Description']: `${ar ? 'فاتورة بيع' : 'Sale'} ${i.invoiceNo || i.id}`,
+            [ar ? 'الإيراد' : 'Revenue']: i.total, [ar ? 'التكلفة' : 'Cost']: cost, [ar ? 'المصروف' : 'Expense']: 0, [ar ? 'الصافي' : 'Net']: i.total - cost,
+          }};
+        });
+        const expRows = props.expenses.map(e => ({ id: `ple-${e.id}`, source: 'expense' as const, sourceId: e.id, date: e.date, values: {
+          [ar ? 'التاريخ' : 'Date']: e.date, [ar ? 'البيان' : 'Description']: e.title, [ar ? 'الإيراد' : 'Revenue']: 0,
+          [ar ? 'التكلفة' : 'Cost']: 0, [ar ? 'المصروف' : 'Expense']: e.amount, [ar ? 'الصافي' : 'Net']: -e.amount,
+        }}));
+        return [...saleRows, ...expRows].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      }
+      default: return [];
+    }
+  }, [kind, props.products, props.categories, props.suppliers, props.customers, props.warehouses, props.transactions, props.expenses, props.vouchers, props.invoices, ar]);
+
+  const filtered = useMemo(() => rows.filter(r => {
+    const text = Object.values(r.values).join(' ').toLowerCase();
+    const dateOk = (!from || !r.date || r.date >= from) && (!to || !r.date || r.date <= to);
+    return dateOk && (!query || text.includes(query.toLowerCase())) && (!productId || String(r.productId) === productId)
+      && (!customerId || String(r.customerId) === customerId) && (!supplierId || String(r.supplierId) === supplierId)
+      && (!categoryId || String(r.categoryId) === categoryId) && (!warehouseId || String(r.warehouseId) === warehouseId);
+  }), [rows, query, productId, customerId, supplierId, categoryId, warehouseId, from, to]);
+
+  const columns = useMemo(() => Array.from(new Set(filtered.flatMap(r => Object.keys(r.values)))), [filtered]);
+  const title = kinds.find(k => k.id === kind)?.[ar ? 'ar' : 'en'] || '';
+
+  const resetFilters = () => { setQuery(''); setProductId(''); setCustomerId(''); setSupplierId(''); setCategoryId(''); setWarehouseId(''); setFrom(''); setTo(''); };
+
+  const printableTable = () => `<table><thead><tr>${columns.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${filtered.map(r => `<tr>${columns.map(c => `<td>${esc(r.values[c] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+
+  const handlePrint = () => printHtml(`<html><head><meta charset="utf-8"><style>@page{size:A4 landscape;margin:8mm}body{font-family:Arial,sans-serif;direction:${ar ? 'rtl' : 'ltr'};color:#111827}h1{text-align:center;font-size:20px}p{text-align:center;color:#64748b;font-size:11px}table{width:100%;border-collapse:collapse;font-size:9px}th,td{border:1px solid #cbd5e1;padding:5px;text-align:${ar ? 'right' : 'left'}th{background:#f1f5f9}</style></head><body><h1>${esc(props.companyName)} — ${esc(title)}</h1><p>${esc(from || '—')} ${ar ? 'إلى' : 'to'} ${esc(to || '—')} — ${filtered.length} ${ar ? 'سجل' : 'records'}</p>${printableTable()}</body></html>`, 'a4', title);
+
+  const handleExcel = () => {
+    const header = columns.map(c => `<Cell><Data ss:Type="String">${esc(c)}</Data></Cell>`).join('');
+    const body = filtered.map(r => `<Row>${columns.map(c => { const v = r.values[c] ?? ''; const num = typeof v === 'number'; return `<Cell><Data ss:Type="${num ? 'Number' : 'String'}">${esc(v)}</Data></Cell>`; }).join('')}</Row>`).join('');
+    const xml = `<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet ss:Name="Records"><Table><Row>${header}</Row>${body}</Table></Worksheet></Workbook>`;
+    const blob = new Blob(['\ufeff', xml], { type: 'application/vnd.ms-excel' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${title}-${new Date().toISOString().slice(0,10)}.xls`; a.click(); URL.revokeObjectURL(a.href);
+  };
+
+  const handleShare = async () => {
+    const csv = [columns.join(','), ...filtered.map(r => columns.map(c => `"${String(r.values[c] ?? '').replace(/"/g, '""')}"`).join(','))].join('\n');
+    const file = new File(['\ufeff', csv], `${title}.csv`, { type: 'text/csv;charset=utf-8' });
+    try {
+      if (navigator.share && navigator.canShare?.({ files: [file] })) await navigator.share({ title, text: `${title} - ${filtered.length}`, files: [file] });
+      else { await navigator.clipboard.writeText(csv); alert(ar ? 'تم نسخ بيانات السجل كاملة للحافظة.' : 'Full record data copied.'); }
+    } catch { /* user cancelled */ }
+  };
+
+  const openEdit = (r: Row) => {
+    setEditRow(r);
+    const values: Record<string, string> = {};
+    Object.entries(r.values).forEach(([k, v]) => values[k] = String(v ?? ''));
+    setEditValues(values);
+  };
+
+  const saveEdit = () => {
+    if (!editRow) return;
+    const vals = Object.values(editValues);
+    const find = (arKey: string, enKey: string) => editValues[ar ? arKey : enKey];
+    switch (editRow.source) {
+      case 'product': props.setProducts(prev => prev.map(x => x.id === editRow.sourceId ? { ...x, name: find('المنتج','Product') || x.name, code: find('الكود','Code') || x.code, quantity: Number(find('الكمية','Qty') ?? find('الكمية الحالية','Current Qty') ?? x.quantity), minQuantity: Number(find('حد الطلب','Min Qty') ?? x.minQuantity), costPrice: Number(find('التكلفة','Cost') ?? x.costPrice), sellingPrice: Number(find('سعر البيع','Sale Price') ?? x.sellingPrice) } : x)); break;
+      case 'supplier': props.setSuppliers(prev => prev.map(x => x.id === editRow.sourceId ? { ...x, name: find('المورد','Supplier') || find('الطرف','Party') || x.name, company: find('الشركة','Company') || x.company, phone: find('الهاتف','Phone') || x.phone, email: find('البريد','Email') || x.email, address: find('العنوان','Address') || x.address, balance: Number(find('الرصيد','Balance') ?? x.balance) } : x)); break;
+      case 'customer': props.setCustomers(prev => prev.map(x => x.id === editRow.sourceId ? { ...x, name: find('العميل','Customer') || find('الطرف','Party') || x.name, phone: find('الهاتف','Phone') || x.phone, email: find('البريد','Email') || x.email, address: find('العنوان','Address') || x.address, balance: Number(find('الرصيد','Balance') ?? x.balance) } : x)); break;
+      case 'warehouse': props.setWarehouses(prev => prev.map(x => x.id === editRow.sourceId ? { ...x, name: find('المخزن','Warehouse') || x.name, location: find('الموقع','Location') || x.location } : x)); break;
+      case 'transaction': props.setTransactions(prev => prev.map(x => x.id === editRow.sourceId ? { ...x, date: find('التاريخ','Date') || x.date, quantity: Number(find('الكمية','Qty') ?? x.quantity), unitPrice: Number(find('سعر الوحدة','Unit Price') ?? x.unitPrice), notes: find('ملاحظات','Notes') || x.notes } : x)); break;
+      case 'expense': props.setExpenses(prev => prev.map(x => x.id === editRow.sourceId ? { ...x, date: find('التاريخ','Date') || x.date, title: find('المصروف','Expense') || find('البيان','Description') || x.title, amount: Number(find('المبلغ','Amount') ?? find('المصروف','Expense') ?? x.amount), notes: find('ملاحظات','Notes') || x.notes } : x)); break;
+      case 'voucher': props.setVouchers(prev => prev.map(x => x.id === editRow.sourceId ? { ...x, date: find('التاريخ','Date') || x.date, amount: Number(find('المبلغ','Amount') ?? x.amount), notes: find('ملاحظات','Notes') || x.notes } : x)); break;
+      case 'invoice': props.setInvoices(prev => prev.map(x => x.id === editRow.sourceId ? { ...x, date: find('التاريخ','Date') || x.date, customerName: find('العميل','Customer') || find('الطرف','Party') || x.customerName, customerPhone: find('الهاتف','Phone') || x.customerPhone, discount: Number(find('الخصم','Discount') ?? x.discount), total: Number(find('الإجمالي','Total') ?? find('الإيراد','Revenue') ?? x.total) } : x)); break;
+    }
+    setEditRow(null);
+  };
+
+  const remove = (r: Row) => {
+    if (!confirm(ar ? 'هل تريد حذف هذا السجل نهائيًا؟ سيتم تحديث التقارير فورًا.' : 'Delete this record permanently? Reports update instantly.')) return;
+    if (r.source === 'product') props.setProducts(p => p.filter(x => x.id !== r.sourceId));
+    if (r.source === 'supplier') props.setSuppliers(p => p.filter(x => x.id !== r.sourceId));
+    if (r.source === 'customer') props.setCustomers(p => p.filter(x => x.id !== r.sourceId));
+    if (r.source === 'warehouse') props.setWarehouses(p => p.filter(x => x.id !== r.sourceId));
+    if (r.source === 'transaction') props.setTransactions(p => p.filter(x => x.id !== r.sourceId));
+    if (r.source === 'expense') props.setExpenses(p => p.filter(x => x.id !== r.sourceId));
+    if (r.source === 'voucher') props.setVouchers(p => p.filter(x => x.id !== r.sourceId));
+    if (r.source === 'invoice') props.setInvoices(p => p.filter(x => x.id !== r.sourceId));
+  };
+
+  return <div className="space-y-4" dir={ar ? 'rtl' : 'ltr'}>
+    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2">
+      {kinds.map(k => <button key={k.id} onClick={() => setKind(k.id)} className={`rounded-xl border px-3 py-2 text-xs font-bold text-start transition ${kind === k.id ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300'}`}>{ar ? k.ar : k.en}</button>)}
+    </div>
+
+    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 space-y-3">
+      <div className="flex items-center gap-2 font-bold text-sm text-slate-800"><Filter className="w-4 h-4 text-indigo-600" />{ar ? 'فلترة السجل اللحظي' : 'Live record filters'}</div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 gap-2">
+        <div className="relative"><Search className="absolute top-2.5 start-2.5 w-4 h-4 text-slate-400"/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder={ar?'بحث شامل...':'Search...'} className="w-full border rounded-lg py-2 ps-8 pe-2 text-xs"/></div>
+        <select value={productId} onChange={e=>setProductId(e.target.value)} className="border rounded-lg px-2 py-2 text-xs"><option value="">{ar?'كل المنتجات':'All products'}</option>{props.products.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select>
+        <select value={customerId} onChange={e=>setCustomerId(e.target.value)} className="border rounded-lg px-2 py-2 text-xs"><option value="">{ar?'كل العملاء':'All customers'}</option>{props.customers.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select>
+        <select value={supplierId} onChange={e=>setSupplierId(e.target.value)} className="border rounded-lg px-2 py-2 text-xs"><option value="">{ar?'كل الموردين':'All suppliers'}</option>{props.suppliers.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select>
+        <select value={categoryId} onChange={e=>setCategoryId(e.target.value)} className="border rounded-lg px-2 py-2 text-xs"><option value="">{ar?'كل الفئات':'All categories'}</option>{props.categories.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select>
+        <select value={warehouseId} onChange={e=>setWarehouseId(e.target.value)} className="border rounded-lg px-2 py-2 text-xs"><option value="">{ar?'كل المخازن':'All warehouses'}</option>{props.warehouses.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select>
+        <input type="date" value={from} onChange={e=>setFrom(e.target.value)} className="border rounded-lg px-2 py-2 text-xs" title={ar?'من تاريخ':'From'} />
+        <input type="date" value={to} onChange={e=>setTo(e.target.value)} className="border rounded-lg px-2 py-2 text-xs" title={ar?'إلى تاريخ':'To'} />
+      </div>
+      <div className="flex flex-wrap justify-between gap-2">
+        <button onClick={resetFilters} className="px-3 py-2 rounded-lg bg-white border text-xs font-bold flex items-center gap-1"><RefreshCw className="w-3.5 h-3.5"/>{ar?'مسح الفلاتر':'Reset'}</button>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={handleExcel} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold flex items-center gap-1"><FileSpreadsheet className="w-4 h-4"/>{ar?'Excel كامل':'Full Excel'}</button>
+          <button onClick={handlePrint} className="px-3 py-2 rounded-lg bg-rose-600 text-white text-xs font-bold flex items-center gap-1"><FileText className="w-4 h-4"/>PDF</button>
+          <button onClick={handlePrint} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold flex items-center gap-1"><Printer className="w-4 h-4"/>{ar?'طباعة':'Print'}</button>
+          <button onClick={handleShare} className="px-3 py-2 rounded-lg bg-sky-600 text-white text-xs font-bold flex items-center gap-1"><Share2 className="w-4 h-4"/>{ar?'مشاركة':'Share'}</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="records-print-area" className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+      <div className="px-4 py-3 border-b flex justify-between items-center"><h3 className="font-black text-slate-900">{title}</h3><span className="text-xs font-bold bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full">{filtered.length} {ar?'سجل':'records'}</span></div>
+      <div className="overflow-auto max-h-[62vh]">
+        <table className="w-full text-xs whitespace-nowrap"><thead className="sticky top-0 bg-slate-100 z-10"><tr>{columns.map(c=><th key={c} className="px-3 py-2 text-start border-b">{c}</th>)}<th className="px-3 py-2 border-b">{ar?'الإجراءات':'Actions'}</th></tr></thead>
+          <tbody>{filtered.length===0?<tr><td colSpan={columns.length+1} className="p-10 text-center text-slate-400">{ar?'لا توجد سجلات مطابقة':'No matching records'}</td></tr>:filtered.map(r=><tr key={r.id} className="border-b hover:bg-slate-50">{columns.map(c=><td key={c} className="px-3 py-2">{typeof r.values[c]==='number' && /الرصيد|المبلغ|الإجمالي|التكلفة|سعر|الإيراد|المصروف|الصافي|Balance|Amount|Total|Cost|Price|Revenue|Expense|Net/.test(c) ? `${currencySymbol}${Number(r.values[c]).toLocaleString()}` : String(r.values[c]??'')}</td>)}<td className="px-3 py-2"><div className="flex gap-1 justify-center"><button onClick={()=>openEdit(r)} className="p-1.5 rounded bg-amber-50 text-amber-700" title={ar?'تعديل':'Edit'}><Pencil className="w-3.5 h-3.5"/></button><button onClick={()=>remove(r)} className="p-1.5 rounded bg-rose-50 text-rose-700" title={ar?'حذف':'Delete'}><Trash2 className="w-3.5 h-3.5"/></button><button onClick={handlePrint} className="p-1.5 rounded bg-indigo-50 text-indigo-700" title={ar?'طباعة':'Print'}><Printer className="w-3.5 h-3.5"/></button><button onClick={handleShare} className="p-1.5 rounded bg-sky-50 text-sky-700" title={ar?'مشاركة':'Share'}><Share2 className="w-3.5 h-3.5"/></button></div></td></tr>)}</tbody>
+        </table>
+      </div>
+    </div>
+
+    {editRow && <div className="fixed inset-0 z-[100] bg-black/50 flex items-center justify-center p-4"><div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden shadow-2xl"><div className="p-4 border-b flex justify-between items-center"><h3 className="font-black">{ar?'تعديل السجل':'Edit record'}</h3><button onClick={()=>setEditRow(null)} className="p-2 rounded-full hover:bg-slate-100"><X className="w-5 h-5"/></button></div><div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3 overflow-auto max-h-[65vh]">{Object.entries(editValues).map(([k,v])=><label key={k} className="text-xs font-bold text-slate-600">{k}<input value={v} onChange={e=>setEditValues(s=>({...s,[k]:e.target.value}))} className="mt-1 w-full border rounded-lg px-3 py-2 font-normal text-slate-900"/></label>)}</div><div className="p-4 border-t flex justify-end gap-2"><button onClick={()=>setEditRow(null)} className="px-4 py-2 rounded-lg border text-xs font-bold">{ar?'إلغاء':'Cancel'}</button><button onClick={saveEdit} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold">{ar?'حفظ التعديل':'Save'}</button></div></div></div>}
+  </div>;
+}

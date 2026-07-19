@@ -1,0 +1,833 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  Lock, 
+  Unlock, 
+  ShieldAlert, 
+  Key, 
+  Terminal, 
+  Check, 
+  Copy, 
+  ExternalLink, 
+  Code, 
+  AlertTriangle, 
+  Cpu, 
+  Sparkles,
+  Smartphone,
+  CheckCircle,
+  Clock
+} from 'lucide-react';
+import { Language } from '../utils/translations';
+
+// Deterministic activation code generator
+export function generateLicenseKey(deviceId: string): string {
+  const salt = "DiyaElmasri_@Retal9488_ERP_System";
+  let hash1 = 0;
+  let hash2 = 0;
+  const combined = (deviceId || '').trim().toUpperCase() + salt;
+  
+  for (let i = 0; i < combined.length; i++) {
+    const char = combined.charCodeAt(i);
+    hash1 = ((hash1 << 5) - hash1) + char;
+    hash1 = hash1 & hash1; // Convert to 32bit integer
+    if (i % 2 === 0) {
+      hash2 = ((hash2 << 7) - hash2) + (char * 13);
+      hash2 = hash2 & hash2;
+    }
+  }
+  
+  const part1 = Math.abs(hash1).toString(16).toUpperCase().padStart(8, '0').slice(0, 4);
+  const part2 = Math.abs(hash2).toString(16).toUpperCase().padStart(8, '0').slice(4, 8);
+  const part3 = Math.abs(hash1 ^ hash2).toString(16).toUpperCase().padStart(8, '0').slice(2, 6);
+  
+  return `LIC-${part1}-${part2}-${part3}`;
+}
+
+// Generate device ID
+export function generateDeviceId(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const randPart = (len: number) => Array.from({length: len}, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  return `DEV-${randPart(4)}-${randPart(4)}-${randPart(4)}`;
+}
+
+interface LicensingLockProps {
+  language: Language;
+  deviceId: string;
+  trialStart: number;
+  onActivate: (key: string) => boolean;
+  onBypassDirectly?: () => void;
+}
+
+export function LicensingLock({
+  language,
+  deviceId,
+  trialStart,
+  onActivate,
+  onBypassDirectly
+}: LicensingLockProps) {
+  const isRtl = language === 'ar';
+  const [activationKey, setActivationKey] = useState('');
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [showDevLogin, setShowDevLogin] = useState(false);
+  const [devPassword, setDevPassword] = useState('');
+  const [devError, setDevError] = useState('');
+  const [showDevPanel, setShowDevPanel] = useState(false);
+  
+  // Dev Panel state
+  const [inputDeviceId, setInputDeviceId] = useState('');
+  const [generatedKey, setGeneratedKey] = useState('');
+  const [devCopied, setDevCopied] = useState(false);
+
+  const handleCopyDeviceId = () => {
+    navigator.clipboard.writeText(deviceId);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleActivateSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    
+    if (!activationKey.trim()) {
+      setError(isRtl ? 'الرجاء إدخال كود التفعيل أولاً!' : 'Please enter the activation code first!');
+      return;
+    }
+
+    const isValid = onActivate(activationKey.trim());
+    if (isValid) {
+      setSuccess(true);
+    } else {
+      setError(isRtl ? 'كود التفعيل غير صحيح! يرجى التواصل مع المبرمج.' : 'Invalid activation code! Please contact the developer.');
+    }
+  };
+
+  const handleDevLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    setDevError('');
+    if (devPassword === '@Retal9488') {
+      setShowDevPanel(true);
+      setShowDevLogin(false);
+      setInputDeviceId(deviceId); // Default to current device ID for quick testing
+    } else {
+      setDevError(isRtl ? 'كلمة المرور غير صحيحة!' : 'Incorrect developer password!');
+    }
+  };
+
+  const handleGenerateKey = () => {
+    if (!inputDeviceId.trim()) {
+      alert(isRtl ? 'الرجاء إدخال معرف الجهاز!' : 'Please enter a device ID!');
+      return;
+    }
+    const key = generateLicenseKey(inputDeviceId.trim());
+    setGeneratedKey(key);
+  };
+
+  const handleCopyGeneratedKey = () => {
+    navigator.clipboard.writeText(generatedKey);
+    setDevCopied(true);
+    setTimeout(() => setDevCopied(false), 2000);
+  };
+
+  const handleDirectActivate = () => {
+    if (onBypassDirectly) {
+      onBypassDirectly();
+      setSuccess(true);
+      setShowDevPanel(false);
+    }
+  };
+
+  // WhatsApp message prefill
+  const whatsappNumber = "01008062995";
+  const whatsappMsg = isRtl 
+    ? `مرحباً م/ ضياء المصري، أود الحصول على كود تفعيل لنظام الكاشير والمحاسبة ERP Hub. معرف الجهاز الخاص بي هو: ${deviceId}`
+    : `Hello Eng. Diya'a Al-Masri, I would like to request an activation code for the ERP Hub POS system. My Device ID is: ${deviceId}`;
+  const whatsappUrl = `https://wa.me/201008062995?text=${encodeURIComponent(whatsappMsg)}`;
+
+  if (success) {
+    return (
+      <div className="fixed inset-0 bg-[#0f172a] flex items-center justify-center p-4 z-50 text-white" dir={isRtl ? 'rtl' : 'ltr'}>
+        <div className="bg-slate-900 border border-emerald-500/30 rounded-3xl p-8 max-w-md w-full text-center space-y-6 shadow-2xl shadow-emerald-500/10 animate-in zoom-in-95 duration-300">
+          <div className="w-20 h-20 bg-emerald-500/10 text-emerald-400 rounded-full flex items-center justify-center mx-auto ring-8 ring-emerald-500/5">
+            <Unlock className="w-10 h-10 animate-bounce" />
+          </div>
+          
+          <div className="space-y-2">
+            <h3 className="text-2xl font-black tracking-tight text-emerald-400">
+              {isRtl ? 'تم التفعيل بنجاح!' : 'Activated Successfully!'}
+            </h3>
+            <p className="text-slate-400 text-xs font-semibold">
+              {isRtl 
+                ? 'تهانينا، تم تنشيط النسخة الكاملة والمستمرة مدى الحياة لهذا الجهاز بنجاح.' 
+                : 'Congratulations, the full lifetime license for this device is now fully unlocked.'}
+            </p>
+          </div>
+
+          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 text-[11px] font-mono text-slate-400">
+            {isRtl ? 'حالة النظام: نسخة مرخصة ومفعلة' : 'System Status: Licensed & Registered'}
+          </div>
+
+          <button
+            onClick={() => window.location.reload()}
+            className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-2xl transition cursor-pointer text-xs shadow-lg shadow-emerald-600/20 active:scale-95"
+          >
+            {isRtl ? 'الدخول إلى النظام' : 'Enter the System'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 bg-[#020617] flex flex-col items-center justify-center p-4 z-50 overflow-y-auto" dir={isRtl ? 'rtl' : 'ltr'}>
+      {/* Background ambient glow effects */}
+      <div className="absolute top-1/4 left-1/4 w-80 h-80 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none"></div>
+      <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-violet-600/10 rounded-full blur-3xl pointer-events-none"></div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-lg shadow-2xl shadow-slate-950/50 overflow-hidden relative z-10 my-8">
+        
+        {/* Brand Banner */}
+        <div className="bg-slate-950 p-6 border-b border-slate-800 text-center relative">
+          <div className="absolute top-4 right-4 text-[10px] bg-indigo-950 text-indigo-400 border border-indigo-900 px-2 py-0.5 rounded-full font-mono font-bold uppercase tracking-wider">
+            {isRtl ? 'انتهاء الفترة التجريبية' : 'Trial Ended'}
+          </div>
+          <div className="w-16 h-16 bg-red-500/10 text-red-400 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-red-500/20 shadow-md shadow-red-500/5">
+            <Lock className="w-8 h-8" />
+          </div>
+          <h2 className="text-lg font-black text-white tracking-tight">
+            {isRtl ? 'نظام المحاسبة وإدارة الكاشير ERP Hub' : 'ERP Hub Smart POS & Financial Suite'}
+          </h2>
+          <p className="text-[10px] text-slate-400 mt-1 font-semibold">
+            {isRtl ? 'لقد انتهت الفترة التجريبية المجانية للبرنامج (24 ساعة)' : 'Your 24-hour free trial evaluation period has fully expired.'}
+          </p>
+        </div>
+
+        {/* Action Panel */}
+        <div className="p-6 sm:p-8 space-y-6">
+          {/* Device ID Display card */}
+          <div className="bg-slate-950/80 p-4 rounded-2xl border border-slate-850 space-y-2.5">
+            <div className="flex justify-between items-center text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+              <span>{isRtl ? 'معرف الجهاز الفريد (Device ID)' : 'Unique Machine ID'}</span>
+              <span className="text-indigo-400 font-mono">SECURE MATCH</span>
+            </div>
+            <div className="flex items-center justify-between gap-3 bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+              <span className="font-mono text-xs font-bold text-slate-200 tracking-wider select-all">{deviceId}</span>
+              <button
+                type="button"
+                onClick={handleCopyDeviceId}
+                className="flex items-center gap-1 bg-slate-800 hover:bg-slate-750 text-slate-300 px-3 py-1.5 rounded-lg text-[10px] font-bold transition active:scale-95 shrink-0 cursor-pointer"
+              >
+                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-indigo-400" />}
+                {copied ? (isRtl ? 'تم النسخ' : 'Copied') : (isRtl ? 'نسخ المعرف' : 'Copy ID')}
+              </button>
+            </div>
+          </div>
+
+          {/* WhatsApp Direct contact button */}
+          <div className="space-y-2.5">
+            <p className="text-[11px] text-slate-400 font-medium leading-relaxed">
+              {isRtl 
+                ? 'للحصول على كود التفعيل المستمر وتثبيت النظام، يرجى نسخ معرف الجهاز أعلاه والضغط على الزر للتواصل المباشر مع المبرمج على الواتساب:'
+                : 'To request a permanent license code, please copy the Device ID above and click the button to send it directly to the developer:'}
+            </p>
+            <a
+              href={whatsappUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3.5 px-6 rounded-2xl transition text-xs shadow-lg shadow-emerald-900/10 active:scale-95 text-center cursor-pointer"
+            >
+              <Smartphone className="w-4.5 h-4.5" />
+              <span>
+                {isRtl 
+                  ? 'طلب كود التفعيل من المبرمج ضياء المصري على الواتساب' 
+                  : 'Contact Developer Diya\'a Al-Masri via WhatsApp'}
+              </span>
+              <ExternalLink className="w-4 h-4 opacity-75 shrink-0" />
+            </a>
+            <div className="text-center">
+              <span className="text-[10px] text-slate-500 font-bold">
+                {isRtl ? 'رقم الواتساب المباشر:' : 'Direct Phone/WhatsApp:'} <span className="font-mono text-slate-400">01008062995</span>
+              </span>
+            </div>
+          </div>
+
+          {/* Activation Key Entry Form */}
+          <form onSubmit={handleActivateSubmit} className="space-y-3 pt-4 border-t border-slate-800">
+            <label className="block text-[11px] font-bold text-slate-400">
+              {isRtl ? 'أدخل كود التفعيل لتنشيط النظام الآن:' : 'Enter License Activation Code:'}
+            </label>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Key className="absolute top-3 left-3 w-4.5 h-4.5 text-indigo-500 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="LIC-XXXX-XXXX-XXXX"
+                  value={activationKey}
+                  onChange={(e) => setActivationKey(e.target.value.toUpperCase())}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 pl-10 pr-4 outline-none focus:border-indigo-500 text-slate-200 font-mono text-xs tracking-widest font-black"
+                />
+              </div>
+              <button
+                type="submit"
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-5 py-2.5 rounded-xl text-xs transition shadow-md shadow-indigo-900/10 shrink-0 cursor-pointer active:scale-95"
+              >
+                {isRtl ? 'تنشيط' : 'Activate'}
+              </button>
+            </div>
+            {error && (
+              <p className="text-[11px] text-rose-400 flex items-center gap-1.5 font-semibold">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{error}</span>
+              </p>
+            )}
+          </form>
+        </div>
+
+        {/* Footer info & Dev Portal Link */}
+        <div className="bg-slate-950 p-4 border-t border-slate-850 flex justify-between items-center text-[10px] text-slate-500 font-semibold font-sans">
+          <span>ERP Hub Software © 2026</span>
+          <button
+            type="button"
+            onClick={() => {
+              setShowDevLogin(!showDevLogin);
+              setDevError('');
+            }}
+            className="text-slate-500 hover:text-indigo-400 transition underline cursor-pointer"
+          >
+            {isRtl ? 'بوابة دخول المطور السرية' : 'Secret Developer Panel'}
+          </button>
+        </div>
+
+        {/* Secret Developer Login block */}
+        {showDevLogin && (
+          <form onSubmit={handleDevLogin} className="p-5 bg-slate-950 border-t border-indigo-900/40 space-y-3 animate-in slide-in-from-bottom duration-200">
+            <div className="flex items-center gap-2 text-indigo-400">
+              <Terminal className="w-4 h-4" />
+              <span className="text-[10px] font-bold uppercase tracking-wider">{isRtl ? 'دخول المطور المعتمد' : 'Developer Access Verification'}</span>
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                placeholder={isRtl ? 'أدخل الرقم السري المالي والبرمجي' : 'Enter Dev Security Password'}
+                value={devPassword}
+                onChange={(e) => setDevPassword(e.target.value)}
+                className="flex-1 bg-slate-900 border border-slate-800 rounded-xl py-2 px-3 text-slate-200 text-xs focus:border-indigo-500 outline-none"
+              />
+              <button
+                type="submit"
+                className="bg-slate-800 hover:bg-slate-700 text-indigo-400 border border-indigo-900/60 font-bold px-4 rounded-xl text-xs transition cursor-pointer"
+              >
+                {isRtl ? 'تحقق' : 'Verify'}
+              </button>
+            </div>
+            {devError && (
+              <p className="text-[10px] text-rose-400 font-semibold">{devError}</p>
+            )}
+          </form>
+        )}
+
+        {/* Secret Developer Generator Panel */}
+        {showDevPanel && (
+          <div className="p-6 bg-slate-950 border-t border-indigo-500/20 space-y-4 animate-in zoom-in-95 duration-200 text-slate-300">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <div className="flex items-center gap-2 text-indigo-400">
+                <Code className="w-5 h-5 text-indigo-500" />
+                <span className="text-xs font-black tracking-tight">{isRtl ? 'مستودع إنشاء تراخيص المطور ضياء المصري' : 'Diya\'a Al-Masri Licensing Depot'}</span>
+              </div>
+              <button
+                onClick={() => setShowDevPanel(false)}
+                className="text-slate-500 hover:text-slate-300 text-xs transition"
+              >
+                {isRtl ? 'إغلاق' : 'Close'}
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              {/* Direct Bypass Feature (saves Diya'a the hassle of copying on client machine) */}
+              <div className="p-3 bg-indigo-950/40 border border-indigo-900/40 rounded-xl space-y-2">
+                <div className="flex items-center justify-between text-[11px] font-bold text-indigo-300">
+                  <span>{isRtl ? 'تنشيط سريع لهذا الجهاز تلقائياً' : 'Automated Instant On-Device Activation'}</span>
+                  <Sparkles className="w-4 h-4 text-amber-400" />
+                </div>
+                <p className="text-[10px] text-slate-400">
+                  {isRtl 
+                    ? 'بما أنك متواجد على نفس جهاز العميل، يمكنك تفعيله مباشرة وتجاوز إدخال الكود يدوياً بكبسة واحدة:'
+                    : 'Since you are physically on the client terminal, unlock this device directly with one button click:'}
+                </p>
+                <button
+                  type="button"
+                  onClick={handleDirectActivate}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-xl transition shadow-md active:scale-95 cursor-pointer text-[10px]"
+                >
+                  {isRtl ? 'تنشيط هذا الجهاز فوراً' : 'Instantly Unlock This Terminal'}
+                </button>
+              </div>
+
+              {/* Generator input */}
+              <div className="space-y-1.5 pt-2">
+                <label className="block text-[11px] font-bold text-slate-400">{isRtl ? 'أدخل معرف جهاز العميل المطلوب ترخيصه:' : 'Input Client Device ID:'}</label>
+                <input
+                  type="text"
+                  placeholder="DEV-XXXX-XXXX-XXXX"
+                  value={inputDeviceId}
+                  onChange={(e) => setInputDeviceId(e.target.value.toUpperCase())}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2 px-3 text-slate-200 font-mono text-xs font-bold focus:border-indigo-500 outline-none"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={handleGenerateKey}
+                className="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-2.5 rounded-xl transition shadow-md active:scale-95 cursor-pointer text-xs"
+              >
+                {isRtl ? 'توليد كود التفعيل اللانهائي' : 'Generate Secure Activation Code'}
+              </button>
+
+              {generatedKey && (
+                <div className="bg-slate-900 p-3.5 rounded-xl border border-slate-800 space-y-2">
+                  <span className="block text-[10px] font-bold text-amber-500 tracking-wider uppercase">{isRtl ? 'كود التفعيل المولد للمستودع:' : 'Generated License Code:'}</span>
+                  <div className="flex items-center justify-between gap-2 bg-slate-950 p-2 rounded-lg border border-slate-800">
+                    <span className="font-mono text-xs font-black text-slate-100 select-all tracking-widest">{generatedKey}</span>
+                    <button
+                      type="button"
+                      onClick={handleCopyGeneratedKey}
+                      className="flex items-center gap-1 bg-slate-800 hover:bg-slate-750 text-slate-200 px-2.5 py-1 rounded text-[10px] font-bold transition cursor-pointer"
+                    >
+                      {devCopied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-amber-500" />}
+                      {devCopied ? (isRtl ? 'تم نسخ الكود' : 'Copied!') : (isRtl ? 'نسخ كود الترخيص' : 'Copy Key')}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Inline Licensing status and activation box for the main workspace sidebar
+interface SidebarActivationBadgeProps {
+  language: Language;
+  deviceId: string;
+  trialStart: number;
+  isLicensed: boolean;
+  onActivate: (key: string) => boolean;
+}
+
+export function SidebarActivationBadge({
+  language,
+  deviceId,
+  trialStart,
+  isLicensed,
+  onActivate
+}: SidebarActivationBadgeProps) {
+  const isRtl = language === 'ar';
+  const [showModal, setShowModal] = useState(false);
+  const [key, setKey] = useState('');
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState(false);
+
+  // Dev state
+  const [showDevLogin, setShowDevLogin] = useState(false);
+  const [devPassword, setDevPassword] = useState('');
+  const [devError, setDevError] = useState('');
+  const [showDevPanel, setShowDevPanel] = useState(false);
+  const [inputDeviceId, setInputDeviceId] = useState('');
+  const [generatedKey, setGeneratedKey] = useState('');
+  const [devCopied, setDevCopied] = useState(false);
+
+  // Calculate hours left
+  const oneDayMs = 86400000;
+  const elapsed = Date.now() - trialStart;
+  const msLeft = Math.max(0, oneDayMs - elapsed);
+  const hoursLeft = Math.floor(msLeft / (1000 * 60 * 60));
+  const minutesLeft = Math.floor((msLeft % (1000 * 60 * 60)) / (1000 * 60));
+
+  const handleActivateSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    const valid = onActivate(key.trim());
+    if (valid) {
+      setSuccess(true);
+      setTimeout(() => {
+        setShowModal(false);
+        window.location.reload();
+      }, 1500);
+    } else {
+      setError(isRtl ? 'الكود غير صحيح!' : 'Invalid activation code!');
+    }
+  };
+
+  const handleDevLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    setDevError('');
+    if (devPassword === '@Retal9488') {
+      setShowDevPanel(true);
+      setShowDevLogin(false);
+      setInputDeviceId(deviceId); // Default to current device ID for quick testing
+    } else {
+      setDevError(isRtl ? 'كلمة المرور غير صحيحة!' : 'Incorrect developer password!');
+    }
+  };
+
+  const handleGenerateKey = () => {
+    if (!inputDeviceId.trim()) {
+      alert(isRtl ? 'الرجاء إدخال معرف الجهاز!' : 'Please enter a device ID!');
+      return;
+    }
+    const key = generateLicenseKey(inputDeviceId.trim());
+    setGeneratedKey(key);
+  };
+
+  const handleCopyGeneratedKey = () => {
+    navigator.clipboard.writeText(generatedKey);
+    setDevCopied(true);
+    setTimeout(() => setDevCopied(false), 2000);
+  };
+
+  const handleDirectActivate = () => {
+    const correctKey = generateLicenseKey(deviceId);
+    onActivate(correctKey);
+    setSuccess(true);
+    setShowDevPanel(false);
+    setTimeout(() => {
+      setShowModal(false);
+      window.location.reload();
+    }, 1500);
+  };
+
+  if (isLicensed) {
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            setShowModal(true);
+            setDevError('');
+            setShowDevLogin(false);
+            setShowDevPanel(false);
+          }}
+          className="w-full text-start bg-emerald-950/40 hover:bg-emerald-900/45 border border-emerald-900/50 p-2.5 rounded-xl flex items-center gap-2 text-emerald-400 text-[10px] font-semibold transition cursor-pointer active:scale-98"
+        >
+          <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+          <div className="leading-tight flex-1">
+            <p className="font-bold">{isRtl ? 'البرنامج مرخص بالكامل' : 'ERP Licensed Suite'}</p>
+            <p className="text-[8px] text-emerald-500 font-mono font-bold mt-0.5">DEVICE: {deviceId.slice(0, 8)}...</p>
+          </div>
+        </button>
+
+        {showModal && (
+          <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-50" dir={isRtl ? 'rtl' : 'ltr'}>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-sm overflow-hidden p-5 space-y-4 text-slate-300 shadow-2xl">
+              <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                <span className="font-bold text-xs text-white">{isRtl ? 'معلومات ترخيص ERP Hub' : 'ERP Hub License Info'}</span>
+                <button onClick={() => { setShowModal(false); setShowDevLogin(false); setShowDevPanel(false); }} className="text-slate-400 hover:text-white">✕</button>
+              </div>
+
+              <div className="space-y-3 text-xs">
+                <div className="flex items-center gap-2 text-emerald-400 font-bold bg-emerald-950/30 p-3 rounded-xl border border-emerald-900/30 animate-pulse">
+                  <Unlock className="w-5 h-5 shrink-0" />
+                  <span>{isRtl ? 'البرنامج مفعل بالكامل مدى الحياة!' : 'System is fully activated for lifetime!'}</span>
+                </div>
+
+                <div className="space-y-1 bg-slate-950 p-2.5 rounded-xl border border-slate-850 font-mono text-[10px]">
+                  <span className="text-slate-500 uppercase">{isRtl ? 'معرف الجهاز الفريد:' : 'Machine Device ID:'}</span>
+                  <p className="text-slate-300 font-bold tracking-wider select-all">{deviceId}</p>
+                </div>
+
+                <div className="space-y-1 bg-slate-950 p-2.5 rounded-xl border border-slate-850 font-mono text-[10px]">
+                  <span className="text-slate-500 uppercase">{isRtl ? 'مفتاح الترخيص المفعل:' : 'Activated License Key:'}</span>
+                  <p className="text-emerald-450 font-bold tracking-wider select-all">{localStorage.getItem('license_key') || 'N/A'}</p>
+                </div>
+
+                <div className="pt-3 border-t border-slate-800 flex justify-between items-center text-[10px] text-slate-500">
+                  <span>ERP Hub Software © 2026</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowDevLogin(!showDevLogin);
+                      setDevError('');
+                    }}
+                    className="text-slate-500 hover:text-indigo-400 transition underline cursor-pointer font-bold"
+                  >
+                    {isRtl ? 'بوابة دخول المطور السرية' : 'Secret Developer Panel'}
+                  </button>
+                </div>
+
+                {/* Secret Developer Login block */}
+                {showDevLogin && (
+                  <form onSubmit={handleDevLogin} className="pt-3 border-t border-indigo-900/40 space-y-2 animate-in slide-in-from-bottom duration-200">
+                    <div className="flex items-center gap-2 text-indigo-400">
+                      <Terminal className="w-4 h-4" />
+                      <span className="text-[10px] font-bold uppercase tracking-wider">{isRtl ? 'دخول المطور المعتمد' : 'Developer Access Verification'}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        placeholder={isRtl ? 'أدخل الرقم السري' : 'Enter Password'}
+                        value={devPassword}
+                        onChange={(e) => setDevPassword(e.target.value)}
+                        className="flex-1 bg-slate-900 border border-slate-800 rounded-xl py-1.5 px-3 text-slate-200 text-xs focus:border-indigo-500 outline-none"
+                      />
+                      <button
+                        type="submit"
+                        className="bg-slate-850 hover:bg-slate-800 text-indigo-400 border border-indigo-900/60 font-bold px-3 rounded-xl text-xs transition cursor-pointer"
+                      >
+                        {isRtl ? 'تحقق' : 'Verify'}
+                      </button>
+                    </div>
+                    {devError && (
+                      <p className="text-[10px] text-rose-400 font-semibold">{devError}</p>
+                    )}
+                  </form>
+                )}
+
+                {/* Secret Developer Generator Panel */}
+                {showDevPanel && (
+                  <div className="pt-3 border-t border-indigo-500/20 space-y-3 text-slate-300">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-indigo-400">
+                        <Code className="w-5 h-5 text-indigo-500" />
+                        <span className="text-[11px] font-black tracking-tight">{isRtl ? 'مستودع إنشاء تراخيص المطور' : 'Licensing Code Generator'}</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 text-xs">
+                      <div className="space-y-1">
+                        <label className="block text-[10px] font-bold text-slate-400">{isRtl ? 'أدخل معرف جهاز العميل:' : 'Client Device ID:'}</label>
+                        <input
+                          type="text"
+                          placeholder="DEV-XXXX-XXXX-XXXX"
+                          value={inputDeviceId}
+                          onChange={(e) => setInputDeviceId(e.target.value.toUpperCase())}
+                          className="w-full bg-slate-900 border border-slate-850 rounded-lg py-1.5 px-2.5 text-slate-250 font-mono text-xs font-bold focus:border-indigo-500 outline-none"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleGenerateKey}
+                        className="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-2 rounded-lg transition text-xs cursor-pointer"
+                      >
+                        {isRtl ? 'توليد كود التفعيل' : 'Generate Activation Code'}
+                      </button>
+
+                      {generatedKey && (
+                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-850 space-y-1.5">
+                          <span className="block text-[9px] font-bold text-amber-500 tracking-wider uppercase">{isRtl ? 'كود التفعيل المولد:' : 'Generated License Code:'}</span>
+                          <div className="flex items-center justify-between gap-2 bg-slate-900 p-1.5 rounded border border-slate-800">
+                            <span className="font-mono text-xs font-black text-slate-100 select-all tracking-wider">{generatedKey}</span>
+                            <button
+                              type="button"
+                              onClick={handleCopyGeneratedKey}
+                              className="flex items-center gap-1 bg-slate-850 hover:bg-slate-800 text-slate-250 px-2 py-0.5 rounded text-[9px] font-bold transition cursor-pointer"
+                            >
+                              {devCopied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-amber-500" />}
+                              {devCopied ? (isRtl ? 'تم النسخ' : 'Copied!') : (isRtl ? 'نسخ' : 'Copy')}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="bg-amber-950/40 border border-amber-900/50 p-2.5 rounded-xl space-y-1.5 text-amber-400 text-[10px]">
+        <div className="flex items-center gap-1.5 font-bold">
+          <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+          <span>{isRtl ? 'الفترة التجريبية نشطة' : 'Trial Period Active'}</span>
+        </div>
+        <p className="text-[9px] text-amber-500 font-semibold leading-snug">
+          {isRtl 
+            ? `متبقي ${hoursLeft} ساعة و ${minutesLeft} دقيقة على انتهاء النسخة التجريبية.`
+            : `${hoursLeft} hrs ${minutesLeft} mins left on free evaluation.`}
+        </p>
+        <button
+          onClick={() => {
+            setShowModal(true);
+            setDevError('');
+            setShowDevLogin(false);
+            setShowDevPanel(false);
+          }}
+          className="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-1 rounded text-[9px] cursor-pointer transition uppercase"
+        >
+          {isRtl ? 'تنشيط النسخة الكاملة' : 'Activate System'}
+        </button>
+      </div>
+
+      {showModal && (
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-50" dir={isRtl ? 'rtl' : 'ltr'}>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-sm overflow-hidden p-5 space-y-4 text-slate-300 shadow-2xl">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+              <span className="font-bold text-xs text-white">{isRtl ? 'تنشيط ترخيص ERP Hub' : 'Register POS ERP Hub License'}</span>
+              <button onClick={() => { setShowModal(false); setShowDevLogin(false); setShowDevPanel(false); }} className="text-slate-400 hover:text-white">✕</button>
+            </div>
+
+            {success ? (
+              <div className="text-center py-6 text-emerald-400 font-bold space-y-2">
+                <Check className="w-10 h-10 mx-auto text-emerald-400 animate-bounce" />
+                <p className="text-xs">{isRtl ? 'تم التفعيل بنجاح! جاري تنشيط النظام...' : 'Activation successful! Unlocking...'}</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <form onSubmit={handleActivateSubmit} className="space-y-4 text-xs">
+                  <div className="space-y-1 bg-slate-950 p-2.5 rounded-xl border border-slate-850 font-mono text-[10px]">
+                    <span className="text-slate-500 uppercase">{isRtl ? 'معرف الجهاز:' : 'Machine Device ID:'}</span>
+                    <p className="text-slate-300 font-bold tracking-wider select-all">{deviceId}</p>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-bold text-slate-400">{isRtl ? 'أدخل كود تفعيل المبرمج ضياء المصري:' : 'Enter License Key:'}</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="LIC-XXXX-XXXX-XXXX"
+                      value={key}
+                      onChange={(e) => setKey(e.target.value.toUpperCase())}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 font-mono text-xs tracking-wider text-slate-100 outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  {error && <p className="text-rose-400 text-[10px] font-bold">{error}</p>}
+
+                  <button
+                    type="submit"
+                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 rounded-xl transition cursor-pointer"
+                  >
+                    {isRtl ? 'تثبيت وتنشيط الترخيص' : 'Install License Key'}
+                  </button>
+                  <div className="text-center">
+                    <a
+                      href={`https://wa.me/201008062995?text=${encodeURIComponent(isRtl ? `مرحباً م/ ضياء المصري، أود الحصول على كود تفعيل لنظام ERP Hub. معرف جهازي: ${deviceId}` : `Hello Eng. Diya'a, I want an activation code. Device ID: ${deviceId}`)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[9px] text-emerald-400 hover:underline inline-flex items-center gap-1"
+                    >
+                      {isRtl ? 'طلب الكود من المبرمج ضياء عبر الواتساب' : 'Request code from Diya\'a via WhatsApp'}
+                    </a>
+                  </div>
+                </form>
+
+                <div className="pt-3 border-t border-slate-800 flex justify-between items-center text-[10px] text-slate-500">
+                  <span>ERP Hub Software © 2026</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowDevLogin(!showDevLogin);
+                      setDevError('');
+                    }}
+                    className="text-slate-500 hover:text-indigo-400 transition underline cursor-pointer font-bold"
+                  >
+                    {isRtl ? 'بوابة دخول المطور السرية' : 'Secret Developer Panel'}
+                  </button>
+                </div>
+
+                {/* Secret Developer Login block */}
+                {showDevLogin && (
+                  <form onSubmit={handleDevLogin} className="pt-3 border-t border-indigo-900/40 space-y-2 animate-in slide-in-from-bottom duration-200">
+                    <div className="flex items-center gap-2 text-indigo-400">
+                      <Terminal className="w-4 h-4" />
+                      <span className="text-[10px] font-bold uppercase tracking-wider">{isRtl ? 'دخول المطور المعتمد' : 'Developer Access Verification'}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        placeholder={isRtl ? 'أدخل الرقم السري' : 'Enter Password'}
+                        value={devPassword}
+                        onChange={(e) => setDevPassword(e.target.value)}
+                        className="flex-1 bg-slate-900 border border-slate-800 rounded-xl py-1.5 px-3 text-slate-200 text-xs focus:border-indigo-500 outline-none"
+                      />
+                      <button
+                        type="submit"
+                        className="bg-slate-850 hover:bg-slate-800 text-indigo-400 border border-indigo-900/60 font-bold px-3 rounded-xl text-xs transition cursor-pointer"
+                      >
+                        {isRtl ? 'تحقق' : 'Verify'}
+                      </button>
+                    </div>
+                    {devError && (
+                      <p className="text-[10px] text-rose-400 font-semibold">{devError}</p>
+                    )}
+                  </form>
+                )}
+
+                {/* Secret Developer Generator Panel */}
+                {showDevPanel && (
+                  <div className="pt-3 border-t border-indigo-500/20 space-y-3 text-slate-300">
+                    <div className="flex items-center gap-2 text-indigo-400">
+                      <Code className="w-5 h-5 text-indigo-500" />
+                      <span className="text-[11px] font-black tracking-tight">{isRtl ? 'مستودع إنشاء تراخيص المطور' : 'Licensing Code Generator'}</span>
+                    </div>
+
+                    <div className="space-y-2 text-xs">
+                      {/* Direct Bypass Feature */}
+                      <div className="p-2.5 bg-indigo-950/40 border border-indigo-900/40 rounded-xl space-y-1">
+                        <div className="flex items-center justify-between text-[10px] font-bold text-indigo-300">
+                          <span>{isRtl ? 'تنشيط سريع لهذا الجهاز تلقائياً' : 'Automated Instant Activation'}</span>
+                          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleDirectActivate}
+                          className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-1.5 px-3 rounded-lg transition text-[9px] cursor-pointer"
+                        >
+                          {isRtl ? 'تنشيط هذا الجهاز فوراً' : 'Instantly Unlock This Terminal'}
+                        </button>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="block text-[10px] font-bold text-slate-400">{isRtl ? 'أدخل معرف جهاز العميل:' : 'Client Device ID:'}</label>
+                        <input
+                          type="text"
+                          placeholder="DEV-XXXX-XXXX-XXXX"
+                          value={inputDeviceId}
+                          onChange={(e) => setInputDeviceId(e.target.value.toUpperCase())}
+                          className="w-full bg-slate-900 border border-slate-850 rounded-lg py-1.5 px-2.5 text-slate-250 font-mono text-xs font-bold focus:border-indigo-500 outline-none"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleGenerateKey}
+                        className="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-2 rounded-lg transition text-xs cursor-pointer"
+                      >
+                        {isRtl ? 'توليد كود التفعيل' : 'Generate Activation Code'}
+                      </button>
+
+                      {generatedKey && (
+                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-850 space-y-1.5">
+                          <span className="block text-[9px] font-bold text-amber-500 tracking-wider uppercase">{isRtl ? 'كود التفعيل المولد:' : 'Generated License Code:'}</span>
+                          <div className="flex items-center justify-between gap-2 bg-slate-900 p-1.5 rounded border border-slate-800">
+                            <span className="font-mono text-xs font-black text-slate-100 select-all tracking-wider">{generatedKey}</span>
+                            <button
+                              type="button"
+                              onClick={handleCopyGeneratedKey}
+                              className="flex items-center gap-1 bg-slate-850 hover:bg-slate-800 text-slate-250 px-2 py-0.5 rounded text-[9px] font-bold transition cursor-pointer"
+                            >
+                              {devCopied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-amber-500" />}
+                              {devCopied ? (isRtl ? 'تم النسخ' : 'Copied!') : (isRtl ? 'نسخ' : 'Copy')}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}

@@ -1,0 +1,30 @@
+import React, { Suspense, lazy } from 'react';
+import type { ErpHubProps } from './erp/ErpHubWorkspace';
+import { ErpUiProvider } from './erp/context/ErpUiContext';
+import { ErpErrorBoundary } from './erp/shared/ErpErrorBoundary';
+import { ErpLoadingScreen } from './erp/shared/ErpLoadingScreen';
+import { ErpModalHost } from './erp/shared/ErpModalHost';
+import { registerDefaultEventFlow } from './erp/events/registerDefaultEventFlow';
+
+const ErpHubWorkspace = lazy(() => import('./erp/ErpHubWorkspace'));
+
+/**
+ * Thin ERP composition root. Feature state, data access, and operations live in
+ * context/store, repositories, use-cases, and lazy-loaded feature screens.
+ */
+function ErpHub(props: ErpHubProps) {
+  registerDefaultEventFlow();
+  return (
+    <ErpErrorBoundary language={props.language}>
+      <ErpUiProvider>
+        <Suspense fallback={<ErpLoadingScreen language={props.language} />}>
+          <ErpHubWorkspace {...props} />
+          <ErpModalHost />
+        </Suspense>
+      </ErpUiProvider>
+    </ErpErrorBoundary>
+  );
+}
+
+export type { ErpHubProps };
+export default React.memo(ErpHub);

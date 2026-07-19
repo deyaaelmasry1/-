@@ -1,0 +1,625 @@
+import React from 'react';
+import { 
+  Scale, ChevronLeft, ChevronRight, Save, X, Edit, Printer, Share2, 
+  Wallet, TrendingDown, Coins, Activity, ArrowDownLeft, ArrowUpRight, Trash2 
+} from 'lucide-react';
+
+interface SupplierLedgerPageProps {
+  language: 'ar' | 'en';
+  isRtl: boolean;
+  viewingSupplierProfile: any;
+  setViewingSupplierProfile: (val: any) => void;
+  isEditingProfile: boolean;
+  setIsEditingProfile: (val: boolean) => void;
+  handleSaveProfileDetails: (type: 'CUSTOMER' | 'SUPPLIER', id: string) => void;
+  handlePrintPartnerLedger: (type: 'CUSTOMER' | 'SUPPLIER', id: string) => void;
+  handleSharePartnerLedger: (type: 'CUSTOMER' | 'SUPPLIER', id: string) => void;
+  profileEditName: string;
+  setProfileEditName: (val: string) => void;
+  profileEditCompany: string;
+  setProfileEditCompany: (val: string) => void;
+  profileEditPhone: string;
+  setProfileEditPhone: (val: string) => void;
+  profileEditEmail: string;
+  setProfileEditEmail: (val: string) => void;
+  profileEditAddress: string;
+  setProfileEditAddress: (val: string) => void;
+  transactions: any[];
+  vouchers: any[];
+  products: any[];
+  setActiveVoucherReceipt: (val: any) => void;
+  setViewingTransaction: (val: any) => void;
+  playBeep: (type: string) => void;
+  handleCreateVoucherFromProfile: (e: React.FormEvent, partyType: 'CUSTOMER' | 'SUPPLIER', partyId: string) => void;
+  handleDeleteVoucherFromProfile: (id: string, partyType: 'CUSTOMER' | 'SUPPLIER', partyId: string) => void;
+  profileVoucherType: 'RECEIPT' | 'PAYMENT';
+  setProfileVoucherType: (val: 'RECEIPT' | 'PAYMENT') => void;
+  profileVoucherAmount: string;
+  setProfileVoucherAmount: (val: string) => void;
+  profileVoucherNotes: string;
+  setProfileVoucherNotes: (val: string) => void;
+  profileVoucherDate: string;
+  setProfileVoucherDate: (val: string) => void;
+  profileVoucherMethod: 'CASH' | 'BANK' | 'CHECK' | 'SETTLEMENT';
+  setProfileVoucherMethod: (val: 'CASH' | 'BANK' | 'CHECK' | 'SETTLEMENT') => void;
+  profileActiveTab: 'info' | 'ops' | 'vouchers' | 'add_voucher';
+  setProfileActiveTab: (val: 'info' | 'ops' | 'vouchers' | 'add_voucher') => void;
+}
+
+export const SupplierLedgerPage: React.FC<SupplierLedgerPageProps> = ({
+  language,
+  isRtl,
+  viewingSupplierProfile,
+  setViewingSupplierProfile,
+  isEditingProfile,
+  setIsEditingProfile,
+  handleSaveProfileDetails,
+  handlePrintPartnerLedger,
+  handleSharePartnerLedger,
+  profileEditName,
+  setProfileEditName,
+  profileEditCompany,
+  setProfileEditCompany,
+  profileEditPhone,
+  setProfileEditPhone,
+  profileEditEmail,
+  setProfileEditEmail,
+  profileEditAddress,
+  setProfileEditAddress,
+  transactions,
+  vouchers,
+  products,
+  setActiveVoucherReceipt,
+  setViewingTransaction,
+  playBeep,
+  handleCreateVoucherFromProfile,
+  handleDeleteVoucherFromProfile,
+  profileVoucherType,
+  setProfileVoucherType,
+  profileVoucherAmount,
+  setProfileVoucherAmount,
+  profileVoucherNotes,
+  setProfileVoucherNotes,
+  profileVoucherDate,
+  setProfileVoucherDate,
+  profileVoucherMethod,
+  setProfileVoucherMethod,
+  profileActiveTab,
+  setProfileActiveTab,
+}) => {
+  const supplierTransactions = transactions.filter(tx => tx.supplierId === viewingSupplierProfile.id);
+  const supplierVouchers = vouchers.filter(v => v.partyId === viewingSupplierProfile.id && v.partyType === 'SUPPLIER');
+
+  const totalRestocks = supplierTransactions.filter(tx => tx.type === 'IN').reduce((sum, tx) => sum + (tx.quantity * tx.unitPrice), 0);
+  const totalPaid = supplierVouchers.filter(v => v.type === 'PAYMENT').reduce((sum, v) => sum + v.amount, 0);
+  const totalOps = supplierTransactions.length + supplierVouchers.length;
+  const currentBalance = viewingSupplierProfile.balance || 0;
+
+  return (
+    <div className="space-y-6 animate-fadeIn" dir={isRtl ? 'rtl' : 'ltr'}>
+      {/* Header */}
+      <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b pb-5">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setViewingSupplierProfile(null);
+                setIsEditingProfile(false);
+                playBeep('click');
+              }}
+              className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition cursor-pointer flex items-center gap-1.5 font-bold text-xs"
+              title={language === 'ar' ? 'رجوع للوحة التحكم' : 'Back to Dashboard'}
+            >
+              {isRtl ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
+              <span>{language === 'ar' ? 'الرجوع للرئيسية 🔙' : 'Back to Dashboard 🔙'}</span>
+            </button>
+            <div>
+              <h3 className="text-xl font-black text-slate-850 flex items-center gap-2">
+                <Scale className="w-5 h-5 text-indigo-600" />
+                {language === 'ar' ? `كشف حساب ومستندات المورد: ${viewingSupplierProfile.name}` : `Supplier Ledger & Statement: ${viewingSupplierProfile.name}`}
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {language === 'ar' ? 'صفحة مالية كاملة ومستقلة لمتابعة حركة المشتريات والمدفوعات والسندات اليدوية وتصفية الديون' : 'Dedicated complete ledger page for monitoring stock orders, payments, and supplier debts'}
+              </p>
+            </div>
+          </div>
+
+          {/* Header Actions */}
+          <div className="flex items-center gap-2">
+            {isEditingProfile ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleSaveProfileDetails('SUPPLIER', viewingSupplierProfile.id)}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded-xl text-xs shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  {language === 'ar' ? 'حفظ التعديلات' : 'Save Changes'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsEditingProfile(false)}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-655 font-bold py-2 px-3 rounded-xl text-xs transition flex items-center gap-1 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  {language === 'ar' ? 'إلغاء' : 'Cancel'}
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileEditName(viewingSupplierProfile.name);
+                    setProfileEditCompany(viewingSupplierProfile.company || '');
+                    setProfileEditPhone(viewingSupplierProfile.phone || '');
+                    setProfileEditEmail(viewingSupplierProfile.email || '');
+                    setProfileEditAddress(viewingSupplierProfile.address || '');
+                    setIsEditingProfile(true);
+                    playBeep('click');
+                  }}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 px-3 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Edit className="w-3.5 h-3.5 text-indigo-600" />
+                  {language === 'ar' ? 'تعديل البيانات' : 'Edit Info'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handlePrintPartnerLedger('SUPPLIER', viewingSupplierProfile.id)}
+                  className="bg-sky-50 hover:bg-sky-100 text-sky-700 font-bold py-2 px-3 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  {language === 'ar' ? 'طباعة كشف الحساب 🖨️' : 'Print Statement 🖨️'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSharePartnerLedger('SUPPLIER', viewingSupplierProfile.id)}
+                  className="bg-teal-50 hover:bg-teal-100 text-teal-700 font-bold py-2 px-3 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Share2 className="w-3.5 h-3.5" />
+                  {language === 'ar' ? 'مشاركة الكشف 🔗' : 'Share Statement 🔗'}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Profile Info Details Grid */}
+        <div className="bg-slate-50 p-5 rounded-2xl border border-slate-150">
+          {isEditingProfile ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 text-xs">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 mb-1">{language === 'ar' ? 'اسم المورد *' : 'Supplier Name *'}</label>
+                <input
+                  type="text"
+                  required
+                  value={profileEditName}
+                  onChange={(e) => setProfileEditName(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-lg p-2 font-bold text-slate-755"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 mb-1">{language === 'ar' ? 'الشركة والمؤسسة' : 'Company'}</label>
+                <input
+                  type="text"
+                  value={profileEditCompany}
+                  onChange={(e) => setProfileEditCompany(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-lg p-2 font-bold text-slate-755"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 mb-1">{language === 'ar' ? 'رقم الهاتف' : 'Phone'}</label>
+                <input
+                  type="text"
+                  value={profileEditPhone}
+                  onChange={(e) => setProfileEditPhone(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono text-slate-755"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 mb-1">{language === 'ar' ? 'البريد الإلكتروني' : 'Email'}</label>
+                <input
+                  type="email"
+                  value={profileEditEmail}
+                  onChange={(e) => setProfileEditEmail(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-slate-755"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 mb-1">{language === 'ar' ? 'العنوان والمستودع' : 'Address'}</label>
+                <input
+                  type="text"
+                  value={profileEditAddress}
+                  onChange={(e) => setProfileEditAddress(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-slate-755"
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 text-xs">
+              <div className="space-y-1">
+                <span className="text-slate-400 font-bold block">{language === 'ar' ? 'الاسم والصفة:' : 'Name/Representative:'}</span>
+                <span className="text-slate-800 font-extrabold text-sm block">{viewingSupplierProfile.name}</span>
+              </div>
+              <div className="space-y-1">
+                <span className="text-slate-400 font-bold block">{language === 'ar' ? 'الشركة / المصنع:' : 'Company/Brand:'}</span>
+                <span className="text-slate-850 font-extrabold block text-slate-755">{viewingSupplierProfile.company || '-'}</span>
+              </div>
+              <div className="space-y-1">
+                <span className="text-slate-400 font-bold block">{language === 'ar' ? 'رقم الهاتف المعتمد:' : 'Phone Number:'}</span>
+                {viewingSupplierProfile.phone ? (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-slate-800 font-mono font-bold block">{viewingSupplierProfile.phone}</span>
+                    <a
+                      href={`https://wa.me/${viewingSupplierProfile.phone.replace(/[^0-9]/g, '')}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-emerald-600 hover:text-emerald-700 font-black text-[10px]"
+                    >
+                      WhatsApp 💬
+                    </a>
+                  </div>
+                ) : (
+                  <span className="text-slate-400">-</span>
+                )}
+              </div>
+              <div className="space-y-1">
+                <span className="text-slate-400 font-bold block">{language === 'ar' ? 'البريد الإلكتروني:' : 'Email Address:'}</span>
+                <span className="text-slate-700 block truncate" title={viewingSupplierProfile.email || ''}>{viewingSupplierProfile.email || '-'}</span>
+              </div>
+              <div className="space-y-1">
+                <span className="text-slate-400 font-bold block">{language === 'ar' ? 'مقر المورد / المستودعات:' : 'Warehouses Address:'}</span>
+                <span className="text-slate-700 block truncate" title={viewingSupplierProfile.address || ''}>{viewingSupplierProfile.address || '-'}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Financial Stats Bento Grid */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Stat 1: Current Balance */}
+          <div className="bg-slate-50 border border-slate-150 p-4 rounded-2xl flex items-center justify-between shadow-3xs">
+            <div className="space-y-1">
+              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">{language === 'ar' ? 'الرصيد المالي الجاري للمورد' : 'Outstanding Balance'}</span>
+              <span className={`text-xl font-black font-mono block ${currentBalance >= 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
+                ${currentBalance.toFixed(2)}
+              </span>
+              <span className="text-[9px] text-slate-400 block font-medium">
+                {currentBalance >= 0 ? (language === 'ar' ? 'لنا رصيد مدين له 🟢' : 'مستحق له (دائن) 🔴') : (language === 'ar' ? 'مستحق له (دائن) 🔴' : 'We owe supplier')}
+              </span>
+            </div>
+            <div className={`p-2.5 rounded-xl ${currentBalance >= 0 ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'}`}>
+              <Wallet className="w-5 h-5" />
+            </div>
+          </div>
+
+          {/* Stat 2: Total restocks value */}
+          <div className="bg-slate-50 border border-slate-150 p-4 rounded-2xl flex items-center justify-between shadow-3xs">
+            <div className="space-y-1">
+              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">{language === 'ar' ? 'إجمالي فواتير التوريد' : 'Total Goods Restocked'}</span>
+              <span className="text-xl font-black text-slate-800 font-mono block">
+                ${totalRestocks.toFixed(2)}
+              </span>
+            </div>
+            <div className="p-2.5 bg-indigo-100 text-indigo-600 rounded-xl">
+              <TrendingDown className="w-5 h-5" />
+            </div>
+          </div>
+
+          {/* Stat 3: Total Paid */}
+          <div className="bg-slate-50 border border-slate-150 p-4 rounded-2xl flex items-center justify-between shadow-3xs">
+            <div className="space-y-1">
+              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">{language === 'ar' ? 'إجمالي مدفوعاتنا للمورد' : 'Total Paid Out Vouchers'}</span>
+              <span className="text-xl font-black text-emerald-600 font-mono block">
+                ${totalPaid.toFixed(2)}
+              </span>
+            </div>
+            <div className="p-2.5 bg-emerald-100 text-emerald-600 rounded-xl">
+              <Coins className="w-5 h-5" />
+            </div>
+          </div>
+
+          {/* Stat 4: Total Operations */}
+          <div className="bg-slate-50 border border-slate-150 p-4 rounded-2xl flex items-center justify-between shadow-3xs">
+            <div className="space-y-1">
+              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">{language === 'ar' ? 'عدد فواتير وحركات المورد' : 'Total Operations Logs'}</span>
+              <span className="text-xl font-black text-slate-800 font-mono block">
+                {totalOps}
+              </span>
+            </div>
+            <div className="p-2.5 bg-sky-100 text-sky-600 rounded-xl">
+              <Activity className="w-5 h-5" />
+            </div>
+          </div>
+        </div>
+
+        {/* VOUCHER BUTTONS & INLINE FORM */}
+        <div className="bg-slate-50 border border-slate-200 p-5 rounded-2xl space-y-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs font-bold text-slate-655 block mr-2">{language === 'ar' ? 'إجراء مالي يدوي سريع:' : 'Quick manual financial actions:'}</span>
+            <button
+              type="button"
+              onClick={() => {
+                setProfileVoucherType('PAYMENT');
+                setProfileVoucherAmount('');
+                setProfileVoucherNotes('');
+                setProfileVoucherDate(new Date().toISOString().split('T')[0]);
+                setProfileActiveTab('add_voucher');
+                playBeep('click');
+              }}
+              className="bg-rose-650 hover:bg-rose-700 text-white font-bold py-2 px-4 rounded-xl text-xs shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+            >
+              <ArrowUpRight className="w-4 h-4" />
+              {language === 'ar' ? '➕ سند صرف (دفع دفعة مالية للمورد)' : '➕ Pay / Payment Voucher'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setProfileVoucherType('RECEIPT');
+                setProfileVoucherAmount('');
+                setProfileVoucherNotes('');
+                setProfileVoucherDate(new Date().toISOString().split('T')[0]);
+                setProfileActiveTab('add_voucher');
+                playBeep('click');
+              }}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded-xl text-xs shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+            >
+              <ArrowDownLeft className="w-4 h-4" />
+              {language === 'ar' ? '➕ سند قبض (استرداد دفعة مالية من המورد)' : '➕ Receive / Receipt Voucher'}
+            </button>
+            {profileActiveTab === 'add_voucher' && (
+              <button
+                type="button"
+                onClick={() => setProfileActiveTab('info')}
+                className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-2 px-3 rounded-xl text-xs transition cursor-pointer"
+              >
+                {language === 'ar' ? 'إغلاق النموذج ❌' : 'Close Form ❌'}
+              </button>
+            )}
+          </div>
+
+          {/* Inline Voucher Form Card */}
+          {profileActiveTab === 'add_voucher' && (
+            <form
+              onSubmit={(e) => {
+                handleCreateVoucherFromProfile(e, 'SUPPLIER', viewingSupplierProfile.id);
+                setProfileActiveTab('info');
+              }}
+              className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs space-y-4 animate-fadeIn"
+            >
+              <h4 className="font-bold text-xs flex items-center gap-1.5 border-b pb-2">
+                {profileVoucherType === 'PAYMENT' ? (
+                  <>
+                    <ArrowUpRight className="w-4.5 h-4.5 text-rose-600" />
+                    <span className="text-rose-700 font-extrabold">{language === 'ar' ? 'سند صرف - دفع مالي لحساب المورد' : 'Payment Voucher - Paying out Cash/Bank to Supplier'}</span>
+                  </>
+                ) : (
+                  <>
+                    <ArrowDownLeft className="w-4.5 h-4.5 text-emerald-600" />
+                    <span className="text-emerald-700 font-extrabold">{language === 'ar' ? 'سند قبض - استلام دفعة مستردة أو تسوية' : 'Receipt Voucher - Receiving Credit refund from Supplier'}</span>
+                  </>
+                )}
+              </h4>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 mb-1">{language === 'ar' ? 'المبلغ المالي المعتمد *' : 'Voucher Amount *'}</label>
+                  <input
+                    type="number"
+                    required
+                    min="0.01"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={profileVoucherAmount}
+                    onChange={(e) => setProfileVoucherAmount(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold text-slate-800 font-mono text-sm outline-none focus:bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 mb-1">{language === 'ar' ? 'طريقة السداد / الصرف' : 'Payment Method'}</label>
+                  <select
+                    value={profileVoucherMethod}
+                    onChange={(e) => setProfileVoucherMethod(e.target.value as any)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold text-slate-700 outline-none focus:bg-white"
+                  >
+                    <option value="CASH">{language === 'ar' ? 'نقدي (صندوق الخزينة الرئيسي)' : 'Cash / Physical Box'}</option>
+                    <option value="BANK">{language === 'ar' ? 'تحويل بنكي / شبكة مِدا' : 'Bank Transfer / POS Card'}</option>
+                    <option value="CHECK">{language === 'ar' ? 'شيك مصرفي معتمد' : 'Cheque Document'}</option>
+                    <option value="SETTLEMENT">{language === 'ar' ? 'تسوية حساب متبادلة (شريك/عميل)' : 'Linked Account Settlement'}</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 mb-1">{language === 'ar' ? 'تاريخ المعاملة المالي' : 'Voucher Date'}</label>
+                  <input
+                    type="date"
+                    required
+                    value={profileVoucherDate}
+                    onChange={(e) => setProfileVoucherDate(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-bold text-slate-700"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 mb-1">{language === 'ar' ? 'ملاحظات وتفاصيل الدفعة' : 'Voucher Notes'}</label>
+                  <input
+                    type="text"
+                    value={profileVoucherNotes}
+                    onChange={(e) => setProfileVoucherNotes(e.target.value)}
+                    placeholder={language === 'ar' ? 'اكتب تفاصيل الدفعة أو سببها هنا...' : 'e.g. Paid part of outstanding bill'}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 outline-none focus:bg-white"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setProfileActiveTab('info')}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-655 font-bold py-2 px-4 rounded-xl text-xs transition cursor-pointer"
+                >
+                  {language === 'ar' ? 'إلغاء' : 'Cancel'}
+                </button>
+                <button
+                  type="submit"
+                  className="bg-indigo-650 hover:bg-indigo-700 text-white font-bold py-2 px-5 rounded-xl text-xs shadow-md transition cursor-pointer"
+                >
+                  {language === 'ar' ? 'تسجيل السند المالي وتحديث الرصيد فوراً 💾' : 'Authorize Voucher & Sync Balance 💾'}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+
+        {/* Operations Chronological History Ledger */}
+        <div className="space-y-3">
+          <h4 className="font-bold text-sm text-slate-800 border-b pb-2">
+            {language === 'ar' ? 'الدفتر المحاسبي للعمليات والقيود الجارية للمورد (اضغط على أي صف لعرض التفاصيل الكاملة 👁️)' : 'Chronological Account Ledger Log (Click any row to open full transaction details 👁️)'}
+          </h4>
+
+          <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-3xs">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left" dir={isRtl ? 'rtl' : 'ltr'}>
+                <thead className="bg-slate-50 border-b border-slate-200 text-slate-550 font-bold uppercase text-[10px]">
+                  <tr>
+                    <th className="p-3">{language === 'ar' ? 'التاريخ' : 'Date'}</th>
+                    <th className="p-3">{language === 'ar' ? 'نوع الحركة / القيد' : 'Operation / Document'}</th>
+                    <th className="p-3">{language === 'ar' ? 'المرجع' : 'Reference'}</th>
+                    <th className="p-3">{language === 'ar' ? 'الوصف والتفاصيل' : 'Narrative / Details'}</th>
+                    <th className="p-3">{language === 'ar' ? 'طريقة السداد' : 'Method'}</th>
+                    <th className="p-3 text-right">{language === 'ar' ? 'القيمة' : 'Amount'}</th>
+                    <th className="p-3 text-center">{language === 'ar' ? 'التحكم' : 'Action'}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-150 font-medium text-slate-650">
+                  {(() => {
+                    const timeline: Array<{
+                      id: string;
+                      date: string;
+                      type: string;
+                      ref: string;
+                      desc: string;
+                      amount: number;
+                      method: string;
+                      rawType: 'INVOICE' | 'TX' | 'VOUCHER';
+                      raw: any;
+                    }> = [];
+
+                    supplierTransactions.forEach(tx => {
+                      const prodName = products.find(p => p.id === tx.productId)?.name || '';
+                      timeline.push({
+                        id: tx.id,
+                        date: tx.date,
+                        type: tx.type === 'IN' 
+                          ? (language === 'ar' ? '📥 فاتورة توريد (مشتريات)' : '📥 Goods Restock Invoice')
+                          : (language === 'ar' ? '↩️ مرتجع مشتريات للمورد' : '↩️ Purchase Return'),
+                        ref: `TX-${tx.id.substring(tx.id.length - 6).toUpperCase()}`,
+                        desc: prodName ? `${prodName} (x${tx.quantity})` : (tx.notes || ''),
+                        amount: tx.quantity * tx.unitPrice,
+                        method: tx.paymentMethod || 'CASH',
+                        rawType: 'TX',
+                        raw: tx
+                      });
+                    });
+
+                    supplierVouchers.forEach(v => {
+                      timeline.push({
+                        id: v.id,
+                        date: v.date,
+                        type: v.type === 'PAYMENT' 
+                          ? (language === 'ar' ? '🔴 سند صرف (مدفوعات)' : '🔴 Payment Voucher')
+                          : (language === 'ar' ? '🟢 سند قبض (مرتجع)' : '🟢 Receipt Voucher'),
+                        ref: v.voucherNumber,
+                        desc: v.notes || (language === 'ar' ? 'حركة دفعة مالية يدوية للمورد' : 'Manual supplier voucher'),
+                        amount: v.amount,
+                        method: v.paymentMethod,
+                        rawType: 'VOUCHER',
+                        raw: v
+                      });
+                    });
+
+                    timeline.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+                    if (timeline.length === 0) {
+                      return (
+                        <tr>
+                          <td colSpan={7} className="p-8 text-center text-slate-400 italic">
+                            {language === 'ar' ? 'لا توجد قيود أو فواتير توريد مسجلة لهذا المورد بعد' : 'No supplier bills or payment entries logged on ledger yet'}
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return timeline.map(item => (
+                      <tr 
+                        key={item.id} 
+                        onClick={() => {
+                          if (item.rawType === 'VOUCHER') {
+                            setActiveVoucherReceipt(item.raw);
+                          } else if (item.rawType === 'TX') {
+                            setViewingTransaction(item.raw);
+                          }
+                          playBeep('click');
+                        }}
+                        className="hover:bg-indigo-50/40 transition text-xs cursor-pointer"
+                        title={language === 'ar' ? 'اضغط لفتح صفحة العملية ومعاينة التفاصيل' : 'Click to open operation details'}
+                      >
+                        <td className="p-3 text-slate-450 font-mono">{new Date(item.date).toLocaleDateString()}</td>
+                        <td className="p-3 font-bold text-slate-800">{item.type}</td>
+                        <td className="p-3 font-mono font-bold text-slate-700">{item.ref}</td>
+                        <td className="p-3 max-w-[250px] truncate text-slate-600 font-bold" title={item.desc}>{item.desc}</td>
+                        <td className="p-3">
+                          <span className="bg-slate-100 text-slate-655 px-2 py-0.5 rounded text-[10px] font-black uppercase">
+                            {item.method}
+                          </span>
+                        </td>
+                        <td className="p-3 text-right font-mono font-bold text-slate-900">
+                          $ {item.amount.toFixed(2)}
+                        </td>
+                        <td className="p-3 text-center flex items-center justify-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                          {item.rawType === 'VOUCHER' && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveVoucherReceipt(item.raw);
+                                  playBeep('click');
+                                }}
+                                className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-extrabold px-2.5 py-1 rounded-lg text-[10px] transition cursor-pointer"
+                              >
+                                {language === 'ar' ? 'طباعة السند 🖨️' : 'Print Voucher 🖨️'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteVoucherFromProfile(item.id, 'SUPPLIER', viewingSupplierProfile.id)}
+                                className="text-slate-450 hover:text-rose-600 p-1 rounded-md transition cursor-pointer hover:bg-rose-50"
+                                title={language === 'ar' ? 'حذف وعكس السند' : 'Delete/Reverse Voucher'}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          )}
+                          {item.rawType === 'TX' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setViewingTransaction(item.raw);
+                                playBeep('click');
+                              }}
+                              className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-extrabold px-2.5 py-1 rounded-lg text-[10px] transition cursor-pointer"
+                            >
+                              {language === 'ar' ? 'تفاصيل الحركة 👁️' : 'Details 👁️'}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ));
+                  })()}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};

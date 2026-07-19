@@ -1,0 +1,1830 @@
+import React, { useMemo, useState } from 'react';
+import { Product, Transaction, Category, Supplier, Customer, Warehouse, Expense } from '../types';
+import { translations, Language } from '../utils/translations';
+import { 
+  Package, 
+  Layers, 
+  TrendingUp, 
+  AlertTriangle, 
+  DollarSign, 
+  ArrowUpRight, 
+  ArrowDownLeft, 
+  Sparkles,
+  ClipboardList,
+  ShoppingCart,
+  ShoppingBag,
+  Coins,
+  Undo2,
+  TrendingDown,
+  Shuffle,
+  Users,
+  Scale,
+  Printer,
+  ArrowLeftRight,
+  BrainCircuit,
+  Smile,
+  Trophy,
+  CheckCircle2,
+  ArrowRight,
+  ArrowLeft,
+  RotateCcw,
+  Wand2,
+  HelpCircle,
+  Plus,
+  Store,
+  Tag,
+  UserPlus,
+  Bell,
+  Wrench,
+  Trash2
+} from 'lucide-react';
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  AreaChart,
+  Area
+} from 'recharts';
+
+interface DashboardProps {
+  products: Product[];
+  transactions: Transaction[];
+  categories: Category[];
+  suppliers: Supplier[];
+  customers: Customer[];
+  warehouses: Warehouse[];
+  language: Language;
+  onNavigate: (tab: string) => void;
+  onTriggerAiAudit: () => void;
+  onNavigateSubTab?: (tab: string, subTab: any) => void;
+  onAddWarehouse: (wh: { name: string; location: string }) => void;
+  onAddCategory: (cat: { name: string }) => void;
+  onAddSupplier: (sup: { name: string; company: string; phone: string; email: string; address: string; balance: number }) => void;
+  onAddCustomer: (cust: { name: string; phone: string; email: string; address: string; balance: number }) => void;
+  onAddProduct: (prod: any) => void;
+  onResetAllData: () => void;
+  setProducts?: React.Dispatch<React.SetStateAction<Product[]>>;
+  setTransactions?: React.Dispatch<React.SetStateAction<Transaction[]>>;
+  setSuppliers?: React.Dispatch<React.SetStateAction<Supplier[]>>;
+  expenses?: Expense[];
+  showToast?: (message: string, type?: 'success' | 'error') => void;
+  currencySymbol?: string;
+}
+
+export default function Dashboard({
+  products,
+  transactions,
+  categories,
+  suppliers,
+  customers,
+  warehouses,
+  language,
+  onNavigate,
+  onTriggerAiAudit,
+  onNavigateSubTab,
+  onAddWarehouse,
+  onAddCategory,
+  onAddSupplier,
+  onAddCustomer,
+  onAddProduct,
+  onResetAllData,
+  setProducts,
+  setTransactions,
+  setSuppliers,
+  expenses,
+  showToast,
+  currencySymbol = language === 'ar' ? 'ج.م' : '$'
+}: DashboardProps) {
+  const t = translations[language];
+  const isRtl = language === 'ar';
+
+  // State to toggle/skip setup wizard if the user just wants to see the empty dashboard
+  const [skipWizard, setSkipWizard] = useState(false);
+
+  // Low Stock Notification State
+  const [showLowStockModal, setShowLowStockModal] = useState(false);
+  const [selectedRestockProd, setSelectedRestockProd] = useState<Product | null>(null);
+  const [restockQty, setRestockQty] = useState<number>(10);
+  const [restockCost, setRestockCost] = useState<number>(0);
+  const [restockSupplierId, setRestockSupplierId] = useState<string>('');
+  const [restockWarehouseId, setRestockWarehouseId] = useState<string>('');
+  const [restockPayMethod, setRestockPayMethod] = useState<'CASH' | 'DEBT'>('CASH');
+
+  // Dynamic Cash safe balance calculation for validation
+  const safeBalance = useMemo(() => {
+    let balance = 0; // Starting Capital is 0
+    transactions.forEach(tx => {
+      if (tx.type === 'OUT') {
+        balance += tx.quantity * tx.unitPrice;
+      } else if (tx.type === 'IN') {
+        balance -= tx.quantity * tx.unitPrice;
+      } else if (tx.type === 'SALE_RETURN') {
+        balance -= tx.quantity * tx.unitPrice;
+      } else if (tx.type === 'PURCHASE_RETURN') {
+        balance += tx.quantity * tx.unitPrice;
+      }
+    });
+    if (expenses) {
+      expenses.forEach(exp => {
+        balance -= exp.amount;
+      });
+    }
+    return balance;
+  }, [transactions, expenses]);
+
+  // Handle Quick restock transaction addition
+  const handleQuickRestock = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedRestockProd) return;
+    if (!restockSupplierId || !restockWarehouseId) {
+      if (showToast) {
+        showToast(language === 'ar' ? 'برجاء تحديد المورد والمستودع أولاً!' : 'Please select a supplier and warehouse first!', 'error');
+      }
+      return;
+    }
+
+    const totalCost = restockQty * restockCost;
+
+    if (restockPayMethod === 'CASH' && safeBalance < totalCost) {
+      if (showToast) {
+        showToast(language === 'ar' ? 'رصيد الخزنة غير كافي لإجراء عملية الشراء نقداً!' : 'Insufficient cash safe balance for this purchase!', 'error');
+      }
+      return;
+    }
+
+    const newTx: Transaction = {
+      id: `tx_${Date.now()}`,
+      productId: selectedRestockProd.id,
+      type: 'IN',
+      quantity: restockQty,
+      unitPrice: restockCost,
+      date: new Date().toISOString(),
+      notes: language === 'ar' ? `شراء وتوريد مستعجل: ${selectedRestockProd.name}` : `Emergency Restock Purchase: ${selectedRestockProd.name}`,
+      supplierId: restockSupplierId,
+      warehouseId: restockWarehouseId,
+    };
+
+    if (setProducts) {
+      setProducts(prev => prev.map(p => {
+        if (p.id === selectedRestockProd.id) {
+          return {
+            ...p,
+            quantity: p.quantity + restockQty,
+            costPrice: restockCost,
+            warehouseId: restockWarehouseId
+          };
+        }
+        return p;
+      }));
+    }
+
+    if (restockPayMethod === 'DEBT' && setSuppliers) {
+      setSuppliers(prev => prev.map(s => {
+        if (s.id === restockSupplierId) {
+          return { ...s, balance: (s.balance || 0) - totalCost };
+        }
+        return s;
+      }));
+    }
+
+    if (setTransactions) {
+      setTransactions(prev => [newTx, ...prev]);
+    }
+
+    if (showToast) {
+      showToast(
+        language === 'ar' 
+          ? `🎉 نجحت عملية التوريد السريع! تم شراء ${restockQty} من ${selectedRestockProd.name} بنجاح.` 
+          : `🎉 Emergency restock successful! Purchased ${restockQty} of ${selectedRestockProd.name}.`, 
+        'success'
+      );
+    }
+
+    setSelectedRestockProd(null);
+    setShowLowStockModal(false);
+  };
+  
+  // State for active step in interactive Wizard (1 to 5)
+  const [wizardStep, setWizardStep] = useState(1);
+
+  // Individual Form States for interactive Wizard
+  const [whName, setWhName] = useState('');
+  const [whLoc, setWhLoc] = useState('');
+  
+  const [catName, setCatName] = useState('');
+
+  const [supName, setSupName] = useState('');
+  const [supPhone, setSupPhone] = useState('');
+  const [supCompany, setSupCompany] = useState('');
+
+  const [custName, setCustName] = useState('');
+  const [custPhone, setCustPhone] = useState('');
+
+  const [prodName, setProdName] = useState('');
+  const [prodCode, setProdCode] = useState('');
+  const [prodCost, setProdCost] = useState('');
+  const [prodPrice, setProdPrice] = useState('');
+  const [prodQty, setProdQty] = useState('10');
+  const [prodMin, setProdMin] = useState('2');
+
+  // Load a 1-Click Template
+  const handleLoadTemplate = (type: 'candy' | 'gaming' | 'grocery') => {
+    // 1. Wipe current
+    onResetAllData();
+
+    // 2. Add sequential records with random delays or generated lists
+    const stamp = Date.now().toString().substring(6);
+    
+    if (type === 'candy') {
+      onAddWarehouse({ name: '🍬 مخزن كاندي السعيد | Happy Candy Warehouse', location: 'الرفوف الملونة - صالة 1' });
+      onAddCategory({ name: 'حلويات وشوكولاتة 🍫' });
+      onAddCategory({ name: 'ألعاب دمى لطيفة 🧸' });
+      onAddSupplier({ name: 'مصنع عمو أحمد للحلويات', company: 'أحمد كاندي المحدودة', phone: '+201008062995', email: 'ahmed@candy.com', address: 'مصر، القاهرة', balance: 0 });
+      onAddCustomer({ name: 'صديق المحل حمزة الصغير', phone: '0123456789', email: 'hamza@sweet.com', address: 'الجيزة', balance: 0 });
+      
+      // Let standard products wait slightly
+      setTimeout(() => {
+        // We look up the newly created entities in state later or let the system merge them
+        onAddProduct({
+          name: 'شوكولاتة نوتيلا ميني 🍫',
+          code: 'BAR-NUT-01',
+          categoryId: '', // will fallback or let user map
+          quantity: 40,
+          minQuantity: 5,
+          costPrice: 1.5,
+          sellingPrice: 2.5,
+          supplierId: '',
+          location: 'رف الأطفال رقم 1',
+          description: 'شوكولاتة بندق ميني طازجة ولذيذة جداً للأطفال والكبار',
+          warehouseId: ''
+        });
+        onAddProduct({
+          name: 'مصاصة الفواكه الملونة 🍭',
+          code: 'BAR-POP-02',
+          categoryId: '',
+          quantity: 120,
+          minQuantity: 10,
+          costPrice: 0.2,
+          sellingPrice: 0.5,
+          supplierId: '',
+          location: 'سلة العرض السحرية الكبيرة',
+          description: 'مصاصة بنكهة الفراولة والبرتقال الطبيعية الدائرية',
+          warehouseId: ''
+        });
+        onAddProduct({
+          name: 'لعبة دب الباندا المحشو 🧸',
+          code: 'BAR-PAN-03',
+          quantity: 12,
+          minQuantity: 2,
+          costPrice: 7.0,
+          sellingPrice: 12.0,
+          location: 'رف الألعاب الرئيسي',
+          description: 'دمية دب ناعمة جداً وصديقة للأطفال',
+          warehouseId: ''
+        });
+      }, 100);
+    } 
+    else if (type === 'gaming') {
+      onAddWarehouse({ name: '🎮 مستودع الألعاب الرئيسي | Main Gaming Hub', location: 'قسم الصيانة والأجهزة' });
+      onAddCategory({ name: 'أجهزة ألعاب بلايستيشن 🎮' });
+      onAddCategory({ name: 'كروت شحن واشتراكات 🎫' });
+      onAddSupplier({ name: 'الشركة العربية للتوزيع التقني', company: 'موزع الألعاب المعتمد', phone: '+966504443322', email: 'sales@gametech.com', address: 'الرياض، العليا', balance: 0 });
+      onAddCustomer({ name: 'اللاعب المحترف بدر العتيبي', phone: '0551122334', email: 'badr@game.com', address: 'جدة', balance: 0 });
+      
+      setTimeout(() => {
+        onAddProduct({
+          name: 'يد تحكم بلايستيشن 5 لاسلكية 🎮',
+          code: 'GAME-PS5-CTRL',
+          quantity: 15,
+          minQuantity: 2,
+          costPrice: 55.0,
+          sellingPrice: 79.0,
+          location: 'صندوق الزجاج المعروض',
+          description: 'يد تحكم DualSense الأصلية باللون الأبيض لجهاز PS5',
+          warehouseId: ''
+        });
+        onAddProduct({
+          name: 'كارت اشتراك بلس 3 أشهر 🎫',
+          code: 'GAME-PLUS-3M',
+          quantity: 80,
+          minQuantity: 5,
+          costPrice: 20.0,
+          sellingPrice: 24.99,
+          location: 'الرف الرقمي الافتراضي',
+          description: 'كود رقمي فوري لتفعيل اشتراك PlayStation Plus',
+          warehouseId: ''
+        });
+      }, 100);
+    } 
+    else if (type === 'grocery') {
+      onAddWarehouse({ name: '🍎 بقالة العائلة السعيدة | Family Grocery', location: 'حي الياسمين - الشارع التجاري' });
+      onAddCategory({ name: 'مواد غذائية وبسكويت 🍪' });
+      onAddCategory({ name: 'مستلزمات مدرسية ✏️' });
+      onAddSupplier({ name: 'شركة المراعي للمنتجات الطازجة', company: 'المراعي KSA', phone: '+966114536000', email: 'info@almarai.com', address: 'المنطقة الصناعية، الرياض', balance: 0 });
+      onAddCustomer({ name: 'الجار الكريم أبو محمد', phone: '0501112223', email: 'abumohd@gmail.com', address: 'بجوار المسجد الكبير', balance: 0 });
+      
+      setTimeout(() => {
+        onAddProduct({
+          name: 'بسكويت شوكولاتة دايجستف 🍪',
+          code: 'GRO-DIG-CHOC',
+          quantity: 60,
+          minQuantity: 8,
+          costPrice: 1.2,
+          sellingPrice: 2.0,
+          location: 'الرف رقم 4 - قسم الحلويات',
+          description: 'بسكويت دايجستف الشهير مغطى بالشوكولاتة اللذيذة',
+          warehouseId: ''
+        });
+        onAddProduct({
+          name: 'دفتر ملاحظات سلكي 100 ورقة ✏️',
+          code: 'GRO-NOTE-100',
+          quantity: 35,
+          minQuantity: 10,
+          costPrice: 0.8,
+          sellingPrice: 1.5,
+          location: 'صندوق القرطاسية الأمامي',
+          description: 'دفتر ملاحظات مدرسي سلكي ممتاز للكتابة والتدوين',
+          warehouseId: ''
+        });
+      }, 100);
+    }
+
+    setSkipWizard(true); // exit wizard instantly to show results!
+  };
+
+  // Submit step 1: Warehouse
+  const submitWarehouse = (e: React.FormEvent) => {
+    e.preventDefault();
+    const nameToUse = whName.trim() || (isRtl ? 'المستودع الرئيسي الذهبي 🌟' : 'Golden Main Warehouse 🌟');
+    const locToUse = whLoc.trim() || (isRtl ? 'المنطقة التجارية الرئيسية' : 'Main Retail Location');
+    onAddWarehouse({ name: nameToUse, location: locToUse });
+    setWhName('');
+    setWhLoc('');
+    setWizardStep(2); // move to next step automatically!
+  };
+
+  // Submit step 2: Category
+  const submitCategory = (e: React.FormEvent) => {
+    e.preventDefault();
+    const nameToUse = catName.trim() || (isRtl ? 'سلع عامة ومنوعة 📦' : 'General Goods 📦');
+    onAddCategory({ name: nameToUse });
+    setCatName('');
+    setWizardStep(3);
+  };
+
+  // Submit step 3: Supplier
+  const submitSupplier = (e: React.FormEvent) => {
+    e.preventDefault();
+    const nameToUse = supName.trim() || (isRtl ? 'المورد السعيد العام 🤝' : 'General Happy Supplier 🤝');
+    const companyToUse = supCompany.trim() || 'Happy Trade Ltd.';
+    onAddSupplier({
+      name: nameToUse,
+      company: companyToUse,
+      phone: supPhone.trim() || '+201008062995',
+      email: 'supplier@shop.com',
+      address: isRtl ? 'منطقة الموردين الرئيسية' : 'Primary Supplier Hub',
+      balance: 0
+    });
+    setSupName('');
+    setSupPhone('');
+    setSupCompany('');
+    setWizardStep(4);
+  };
+
+  // Submit step 4: Customer
+  const submitCustomer = (e: React.FormEvent) => {
+    e.preventDefault();
+    const nameToUse = custName.trim() || (isRtl ? 'عميل كاش نقدي سريع 👤' : 'Cash Walk-in Customer 👤');
+    onAddCustomer({
+      name: nameToUse,
+      phone: custPhone.trim() || '0100000000',
+      email: 'customer@store.com',
+      address: isRtl ? 'الشارع العام المجاوز للمحل' : 'Local Community',
+      balance: 0
+    });
+    setCustName('');
+    setCustPhone('');
+    setWizardStep(5);
+  };
+
+  // Submit step 5: Product
+  const submitProduct = (e: React.FormEvent) => {
+    e.preventDefault();
+    const nameToUse = prodName.trim() || (isRtl ? 'منتجي السحري الأول ✨' : 'My First Magical Product ✨');
+    const codeToUse = prodCode.trim() || `PRD-${Math.floor(1000 + Math.random() * 9000)}`;
+    const costToUse = parseFloat(prodCost) || 5.0;
+    const priceToUse = parseFloat(prodPrice) || 8.0;
+    const qtyToUse = parseInt(prodQty) || 10;
+    const minToUse = parseInt(prodMin) || 2;
+
+    onAddProduct({
+      name: nameToUse,
+      code: codeToUse,
+      categoryId: categories[0]?.id || '',
+      quantity: qtyToUse,
+      minQuantity: minToUse,
+      costPrice: costToUse,
+      sellingPrice: priceToUse,
+      supplierId: suppliers[0]?.id || '',
+      location: isRtl ? 'الرف الملون الأمامي أ' : 'Front Showcase Shelf A',
+      description: isRtl ? 'أول منتج لي قمت بإضافته يدوياً بنجاح!' : 'My very first manually configured product item!',
+      warehouseId: warehouses[0]?.id || ''
+    });
+
+    setProdName('');
+    setProdCode('');
+    setProdCost('');
+    setProdPrice('');
+    setProdQty('10');
+    setProdMin('2');
+    
+    setSkipWizard(true); // Setup complete! Let's display the dashboard with this product.
+  };
+
+  // Skip wizard & load some simple standard defaults
+  const handleAutoConfigureDefaults = () => {
+    onAddWarehouse({ name: 'المخزن الافتراضي الكاشير', location: 'خلف الكاونتر مباشرة' });
+    onAddCategory({ name: 'مستلزمات عامة منوعة 📦' });
+    onAddSupplier({ name: 'شركة المورد المعتمد السريع', company: 'الموردون العرب', phone: '+201008062995', email: 'supply@ar.com', address: 'المنطقة اللوجستية', balance: 0 });
+    onAddCustomer({ name: 'عميل عام نقدي سريع 👤', phone: '00000000', email: 'cash@walkin.com', address: 'المحل', balance: 0 });
+    
+    setTimeout(() => {
+      onAddProduct({
+        name: 'كيس شيبس عائلي مقرمش 🍟',
+        code: 'CHP-WALK-11',
+        quantity: 25,
+        minQuantity: 5,
+        costPrice: 1.0,
+        sellingPrice: 1.5,
+        location: 'رف الوجبات الخفيفة الرئيسي',
+        description: 'بطاطس مقرمشة عائلية بنكهة الملح الطبيعي والخل',
+        warehouseId: ''
+      });
+    }, 100);
+
+    setSkipWizard(true);
+  };
+
+  // Determine if database is totally empty
+  const isDatabaseEmpty = products.length === 0;
+
+  // Render Setup Wizard
+  if (isDatabaseEmpty && !skipWizard) {
+    return (
+      <div className="space-y-6 max-w-5xl mx-auto" dir={isRtl ? 'rtl' : 'ltr'}>
+        
+        {/* Playful & Kid-Friendly Header Banner */}
+        <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-500 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden text-center sm:text-start animate-in fade-in zoom-in-95 duration-350">
+          <div className="relative z-10 flex flex-col sm:flex-row items-center gap-5 justify-between">
+            <div className="space-y-2">
+              <span className="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-md text-white text-[11px] font-black px-3 py-1 rounded-full uppercase tracking-wider">
+                <Sparkles className="w-3.5 h-3.5 animate-spin text-amber-300" />
+                {isRtl ? 'تم تصفير النظام وبدء تشغيل جديد!' : 'System is clean & ready to start!'}
+              </span>
+              <h1 className="text-2xl sm:text-4xl font-black font-sans tracking-tight text-white leading-tight">
+                {isRtl ? 'أهلاً بك في عالم التجارة السعيد! 🌟' : 'Welcome to Happy Commerce! 🌟'}
+              </h1>
+              <p className="text-slate-100 max-w-2xl text-xs sm:text-sm font-semibold leading-relaxed">
+                {isRtl 
+                  ? 'قمنا بإعداد هذا المعالج السحري حتى يتمكن أي شخص - كبيراً كان أم طفلاً - من تهيئة دكانه الخاص والبدء في البيع فوراً كالمحترفين وبسهولة تامة!'
+                  : 'We created this magical setup wizard so that anyone—adult or child—can configure their own shop and start selling like a pro in seconds!'}
+              </p>
+            </div>
+            
+            {/* Friendly Mascot Icon */}
+            <div className="w-20 h-20 bg-white/10 backdrop-blur-md rounded-2xl flex items-center justify-center border border-white/25 shrink-0 animate-bounce">
+              <Smile className="w-12 h-12 text-white" />
+            </div>
+          </div>
+          
+          {/* Abstract graphic shape */}
+          <div className="absolute right-[-40px] bottom-[-40px] w-48 h-48 bg-white/10 rounded-full filter blur-xl"></div>
+        </div>
+
+        {/* --- METHOD 1: 1-CLICK INSTANT SHOP TEMPLATES (Super easy for kids!) --- */}
+        <div className="bg-white p-6 sm:p-8 rounded-3xl border border-indigo-100 shadow-sm space-y-5 relative overflow-hidden">
+          <div className="absolute top-0 right-0 left-0 h-1.5 bg-gradient-to-r from-emerald-400 to-teal-400"></div>
+          
+          <div className="text-center space-y-1.5">
+            <h2 className="text-lg sm:text-xl font-black text-slate-850 flex items-center justify-center gap-2">
+              <Wand2 className="w-5 h-5 text-emerald-500 animate-pulse" />
+              {isRtl ? 'الطريقة الأسرع: كبسة الزر السحرية الفورية (موصى بها للأطفال!) ⚡' : 'Fastest Way: 1-Click Instant Templates (Perfect for Kids!) ⚡'}
+            </h2>
+            <p className="text-xs text-slate-500 font-medium">
+              {isRtl 
+                ? 'اختر نوع متجرك المفضل ليقوم النظام بتجهيزه فوراً ببيانات مبهجة وواقعية مجاناً وسرعة هائلة!' 
+                : 'Choose your favorite shop theme to instantly pre-fill your entire POS database with playful, realistic data.'}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5 pt-2">
+            {/* Template A: Candy Shop */}
+            <button
+              onClick={() => handleLoadTemplate('candy')}
+              className="group flex flex-col items-center p-5 border-2 border-slate-100 hover:border-pink-300 hover:bg-pink-50/10 rounded-2xl transition text-center space-y-3 cursor-pointer outline-none relative"
+            >
+              <div className="w-14 h-14 bg-pink-50 rounded-full flex items-center justify-center group-hover:scale-110 transition text-2xl">
+                🍬
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-extrabold text-slate-800 text-sm">{isRtl ? '🍬 دكان الحلويات والألعاب' : 'Sweet Candy Shop'}</h3>
+                <p className="text-[11px] text-slate-400 leading-normal">
+                  {isRtl ? 'حلويات، شوكولاتة نوتيلا، ومصاصات ملونة، وألعاب الدبب القطيفة.' : 'Lollipops, Nutella chocolates, plush teddy bears & more.'}
+                </p>
+              </div>
+              <span className="bg-pink-100 text-pink-700 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">
+                {isRtl ? 'لذيذ وممتع' : 'Sweet & Fun'}
+              </span>
+            </button>
+
+            {/* Template B: Gaming Zone */}
+            <button
+              onClick={() => handleLoadTemplate('gaming')}
+              className="group flex flex-col items-center p-5 border-2 border-slate-100 hover:border-indigo-300 hover:bg-indigo-50/10 rounded-2xl transition text-center space-y-3 cursor-pointer outline-none relative"
+            >
+              <div className="w-14 h-14 bg-indigo-50 rounded-full flex items-center justify-center group-hover:scale-110 transition text-2xl">
+                🎮
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-extrabold text-slate-800 text-sm">{isRtl ? '🎮 صالة ألعاب وبطاقات' : 'Gaming & PS Zone'}</h3>
+                <p className="text-[11px] text-slate-400 leading-normal">
+                  {isRtl ? 'أجهزة بلايستيشن، أيادي تحكم لاسلكية، كروت اشتراك وبطاقات شحن.' : 'PlayStation systems, controllers, and virtual charging cards.'}
+                </p>
+              </div>
+              <span className="bg-indigo-100 text-indigo-700 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">
+                {isRtl ? 'الخيار الحماسي' : 'Action Pack'}
+              </span>
+            </button>
+
+            {/* Template C: Grocery & Stationery */}
+            <button
+              onClick={() => handleLoadTemplate('grocery')}
+              className="group flex flex-col items-center p-5 border-2 border-slate-100 hover:border-emerald-300 hover:bg-emerald-50/10 rounded-2xl transition text-center space-y-3 cursor-pointer outline-none relative"
+            >
+              <div className="w-14 h-14 bg-emerald-50 rounded-full flex items-center justify-center group-hover:scale-110 transition text-2xl">
+                🍎
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-extrabold text-slate-800 text-sm">{isRtl ? '🍎 سوبرماركت البقالة' : 'Happy Family Grocery'}</h3>
+                <p className="text-[11px] text-slate-400 leading-normal">
+                  {isRtl ? 'بسكويت دايجستف شوكولاتة، ألبان طازجة، ودفاتر وأقلام وقرطاسية.' : 'Fresh milk, cookies, high-quality notebook binders & snacks.'}
+                </p>
+              </div>
+              <span className="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">
+                {isRtl ? 'البداية الكلاسيكية' : 'Classic Way'}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* --- METHOD 2: STEP-BY-STEP INTERACTIVE WIZARD --- */}
+        <div className="bg-white p-6 sm:p-8 rounded-3xl border border-slate-200/60 shadow-sm space-y-6 relative">
+          <div className="absolute top-0 right-0 left-0 h-1.5 bg-gradient-to-r from-indigo-500 to-purple-500"></div>
+
+          {/* Wizard Heading */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-100 pb-4">
+            <div className="space-y-1">
+              <h3 className="text-base sm:text-lg font-black text-slate-800 flex items-center gap-2">
+                <Trophy className="w-5 h-5 text-amber-500" />
+                {isRtl ? 'معالج التأسيس التفاعلي الذاتي (خطوة بخطوة)' : 'Interactive Step-by-Step Store Setup'}
+              </h3>
+              <p className="text-xs text-slate-400 font-medium">
+                {isRtl 
+                  ? 'املأ المعلومات البسيطة في الأسفل وسيتم نقلك تلقائياً للخطوة التالية لتأسيس إمبراطوريتك!' 
+                  : 'Follow the intuitive step tracker. Enter easy configurations and let the system guide you.'}
+              </p>
+            </div>
+
+            {/* Gamified Level Status */}
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-2 flex items-center gap-2 shrink-0 self-start sm:self-center">
+              <span className="text-xl">👑</span>
+              <div className="text-[11px] leading-tight font-sans">
+                <p className="text-slate-400 font-bold uppercase">{isRtl ? 'المستوى الحالي' : 'CURRENT RANK'}</p>
+                <p className="text-amber-850 font-black">
+                  {wizardStep === 1 && (isRtl ? 'مستكشف المستودعات 📍' : 'Warehouse Pioneer 📍')}
+                  {wizardStep === 2 && (isRtl ? 'مصنف البضائع اللطيف 🏷️' : 'Category Stylist 🏷️')}
+                  {wizardStep === 3 && (isRtl ? 'شريك الموردين الكبار 🤝' : 'Supply Partner 🤝')}
+                  {wizardStep === 4 && (isRtl ? 'صديق الزبائن المخلص 👤' : 'Customer Hero 👤')}
+                  {wizardStep === 5 && (isRtl ? 'مدير المبيعات الأعظم 📦' : 'Master Retailer 📦')}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Visual Step Tracker Navigation Rail */}
+          <div className="grid grid-cols-5 gap-2 text-center text-[10px] sm:text-xs font-black">
+            {[
+              { num: 1, icon: Store, titleAr: '1. المستودع', titleEn: '1. Warehouse' },
+              { num: 2, icon: Tag, titleAr: '2. التصنيف', titleEn: '2. Category' },
+              { num: 3, icon: Users, titleAr: '3. المورد', titleEn: '3. Supplier' },
+              { num: 4, icon: UserPlus, titleAr: '4. العميل', titleEn: '4. Customer' },
+              { num: 5, icon: Package, titleAr: '5. أول منتج', titleEn: '5. Product' }
+            ].map(step => {
+              const IconComp = step.icon;
+              const isPast = step.num < wizardStep;
+              const isCurrent = step.num === wizardStep;
+              return (
+                <button
+                  key={step.num}
+                  onClick={() => setWizardStep(step.num)}
+                  className={`flex flex-col items-center py-2.5 px-1 rounded-xl transition border cursor-pointer outline-none ${
+                    isCurrent 
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-600/10' 
+                      : isPast
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                        : 'bg-slate-50 text-slate-400 border-slate-200/50'
+                  }`}
+                >
+                  <IconComp className="w-4 h-4 mb-1" />
+                  <span className="truncate max-w-full hidden sm:inline">{isRtl ? step.titleAr : step.titleEn}</span>
+                  <span className="sm:hidden">{step.num}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Steps Main Workspaces */}
+          <div className="bg-slate-50/70 rounded-2xl p-5 sm:p-6 border border-slate-200/40 min-h-[220px] flex flex-col justify-between">
+            
+            {/* Step 1: Warehouse setup form */}
+            {wizardStep === 1 && (
+              <form onSubmit={submitWarehouse} className="space-y-4">
+                <div className="space-y-1">
+                  <h4 className="font-extrabold text-slate-800 text-sm flex items-center gap-1.5">
+                    <span className="text-indigo-600 text-base">📍</span>
+                    {isRtl ? 'المستودع أو الفرع الأول لك' : 'Your First Store/Branch'}
+                  </h4>
+                  <p className="text-[11px] text-slate-450 leading-normal">
+                    {isRtl 
+                      ? 'كل منتجاتك يجب أن تقع في مكان ما! مثل مستودعك، أو المحل الرئيسي، أو الرف الصغير الخاص بك.' 
+                      : 'Every product must reside in a location. Enter your store or warehouse name.'}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase font-bold text-slate-400">{isRtl ? 'اسم المستودع' : 'Warehouse Name'}</label>
+                    <input 
+                      type="text" 
+                      placeholder={isRtl ? 'مثال: المستودع الرئيسي، المحل الأول' : 'e.g. Main Retail Store'}
+                      value={whName}
+                      onChange={e => setWhName(e.target.value)}
+                      className="w-full bg-white px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase font-bold text-slate-400">{isRtl ? 'موقع المستودع / العنوان' : 'Location'}</label>
+                    <input 
+                      type="text" 
+                      placeholder={isRtl ? 'مثال: شارع الملك عبدالعزيز' : 'e.g. King Abdulaziz Road'}
+                      value={whLoc}
+                      onChange={e => setWhLoc(e.target.value)}
+                      className="w-full bg-white px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Kids dynamic suggestions */}
+                <div className="flex flex-wrap gap-2 pt-2 items-center">
+                  <span className="text-[10px] font-bold text-slate-400">{isRtl ? '💡 اقتراح سريع:' : '💡 Quick Fill:'}</span>
+                  <button 
+                    type="button"
+                    onClick={() => { setWhName('المستودع الرئيسي الكاشير'); setWhLoc('وسط المدينة'); }}
+                    className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-[10px] font-bold px-2.5 py-1 rounded-lg transition"
+                  >
+                    {isRtl ? 'المستودع الرئيسي (وسط المدينة)' : 'Main Store (Downtown)'}
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => { setWhName('مخزن الرفوف الملونة 🌈'); setWhLoc('غرفة الألعاب'); }}
+                    className="bg-pink-50 text-pink-700 hover:bg-pink-100 text-[10px] font-bold px-2.5 py-1 rounded-lg transition"
+                  >
+                    {isRtl ? 'مخزن الرفوف الملونة 🌈' : 'Colorful Shelves Store 🌈'}
+                  </button>
+                </div>
+
+                <div className="pt-4 border-t border-slate-200/50 flex justify-end">
+                  <button
+                    type="submit"
+                    className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl text-xs font-bold transition shadow-md shadow-indigo-600/15 cursor-pointer"
+                  >
+                    {isRtl ? 'حفظ والانتقال للخطوة التالية' : 'Save and Continue'}
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Step 2: Category Setup Form */}
+            {wizardStep === 2 && (
+              <form onSubmit={submitCategory} className="space-y-4">
+                <div className="space-y-1">
+                  <h4 className="font-extrabold text-slate-800 text-sm flex items-center gap-1.5">
+                    <span className="text-indigo-600 text-base">🏷️</span>
+                    {isRtl ? 'إنشاء الفئة / تصنيف البضاعة' : 'Create Product Category'}
+                  </h4>
+                  <p className="text-[11px] text-slate-450 leading-normal">
+                    {isRtl 
+                      ? 'التصنيفات تساعدك على تنظيم متجرك لتجد كل شيء بسهولة! مثل فئة "المشروبات" أو "الألعاب".' 
+                      : 'Categories keep your shop organized! Add group headers like "Beverages" or "Electronics".'}
+                  </p>
+                </div>
+
+                <div className="space-y-1 max-w-md">
+                  <label className="text-[10px] uppercase font-bold text-slate-400">{isRtl ? 'اسم الفئة / التصنيف الجديد' : 'Category Name'}</label>
+                  <input 
+                    type="text" 
+                    placeholder={isRtl ? 'مثال: ألعاب ودمى، بقالة، حلويات' : 'e.g. Candy, Toys, Food'}
+                    value={catName}
+                    onChange={e => setCatName(e.target.value)}
+                    required
+                    className="w-full bg-white px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                {/* Kids suggestions */}
+                <div className="flex flex-wrap gap-2 pt-2 items-center">
+                  <span className="text-[10px] font-bold text-slate-400">{isRtl ? '💡 اقتراح سحري:' : '💡 Magic Suggestion:'}</span>
+                  {['حلويات وشوكولاتة 🍬', 'ألعاب وهدايا 🎁', 'قرطاسية وأقلام ✏️', 'أجهزة إلكترونية 📱'].map(cat => (
+                    <button 
+                      key={cat}
+                      type="button"
+                      onClick={() => setCatName(cat)}
+                      className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-[10px] font-bold px-2.5 py-1 rounded-lg transition"
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="pt-4 border-t border-slate-200/50 flex justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setWizardStep(1)}
+                    className="flex items-center gap-1 text-slate-500 hover:text-slate-800 text-xs font-bold"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                    {isRtl ? 'السابق' : 'Previous'}
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl text-xs font-bold transition shadow-md shadow-indigo-600/15 cursor-pointer"
+                  >
+                    {isRtl ? 'حفظ ومتابعة' : 'Save and Continue'}
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Step 3: Supplier Setup Form */}
+            {wizardStep === 3 && (
+              <form onSubmit={submitSupplier} className="space-y-4">
+                <div className="space-y-1">
+                  <h4 className="font-extrabold text-slate-800 text-sm flex items-center gap-1.5">
+                    <span className="text-indigo-600 text-base">🤝</span>
+                    {isRtl ? 'إضافة المورد الأول لمتجرك' : 'Your First Supplier'}
+                  </h4>
+                  <p className="text-[11px] text-slate-450 leading-normal">
+                    {isRtl 
+                      ? 'المورد هو الشخص أو الشركة التي تشتري منها السلع والمنتجات لتبيعها في دكانك.' 
+                      : 'A supplier is the vendor who sells you items so you can sell them in your store.'}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="space-y-1 col-span-1 sm:col-span-1">
+                    <label className="text-[10px] uppercase font-bold text-slate-400">{isRtl ? 'اسم المورد' : 'Supplier Name'}</label>
+                    <input 
+                      type="text" 
+                      placeholder={isRtl ? 'مثال: عمو أحمد المورد' : 'e.g. Supplier Ahmed'}
+                      value={supName}
+                      onChange={e => setSupName(e.target.value)}
+                      required
+                      className="w-full bg-white px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase font-bold text-slate-400">{isRtl ? 'اسم الشركة' : 'Company'}</label>
+                    <input 
+                      type="text" 
+                      placeholder={isRtl ? 'مصنع الألعاب السعيدة' : 'e.g. Toys Factory'}
+                      value={supCompany}
+                      onChange={e => setSupCompany(e.target.value)}
+                      className="w-full bg-white px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase font-bold text-slate-400">{isRtl ? 'رقم الهاتف' : 'Phone'}</label>
+                    <input 
+                      type="text" 
+                      placeholder="+201008062995"
+                      value={supPhone}
+                      onChange={e => setSupPhone(e.target.value)}
+                      className="w-full bg-white px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Sugestion */}
+                <div className="flex flex-wrap gap-2 pt-1 items-center">
+                  <span className="text-[10px] font-bold text-slate-400">{isRtl ? '💡 فكرة سريعة:' : '💡 Ideas:'}</span>
+                  <button 
+                    type="button"
+                    onClick={() => { setSupName('الموزع الرسمي السريع 🤝'); setSupCompany('مجموعة الموزعين المشتركة'); setSupPhone('01002020202'); }}
+                    className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-[10px] font-bold px-2.5 py-1 rounded-lg transition"
+                  >
+                    {isRtl ? 'المورد الرسمي السريع 🤝' : 'Official Fast Supplier 🤝'}
+                  </button>
+                </div>
+
+                <div className="pt-4 border-t border-slate-200/50 flex justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setWizardStep(2)}
+                    className="flex items-center gap-1 text-slate-500 hover:text-slate-800 text-xs font-bold"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                    {isRtl ? 'السابق' : 'Previous'}
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl text-xs font-bold transition shadow-md shadow-indigo-600/15 cursor-pointer"
+                  >
+                    {isRtl ? 'حفظ ومتابعة' : 'Save and Continue'}
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Step 4: Customer Setup Form */}
+            {wizardStep === 4 && (
+              <form onSubmit={submitCustomer} className="space-y-4">
+                <div className="space-y-1">
+                  <h4 className="font-extrabold text-slate-800 text-sm flex items-center gap-1.5">
+                    <span className="text-indigo-600 text-base">👤</span>
+                    {isRtl ? 'تسجيل العميل الأول لعمليات الكاشير' : 'Create Your First Customer'}
+                  </h4>
+                  <p className="text-[11px] text-slate-450 leading-normal">
+                    {isRtl 
+                      ? 'العميل هو الشخص اللطيف الذي يشتري البضائع من المحل. يمكنك إضافة عميل نقدي عام ليسهل عليك عمليات البيع اليومية.' 
+                      : 'Add a friendly walk-in customer profile to make quick daily transactions super smooth.'}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase font-bold text-slate-400">{isRtl ? 'اسم العميل' : 'Customer Name'}</label>
+                    <input 
+                      type="text" 
+                      placeholder={isRtl ? 'مثال: عميل كاش نقدي عام' : 'e.g. Walk-in Cash Customer'}
+                      value={custName}
+                      onChange={e => setCustName(e.target.value)}
+                      required
+                      className="w-full bg-white px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase font-bold text-slate-400">{isRtl ? 'رقم الهاتف (اختياري)' : 'Phone (Optional)'}</label>
+                    <input 
+                      type="text" 
+                      placeholder="0500000000"
+                      value={custPhone}
+                      onChange={e => setCustPhone(e.target.value)}
+                      className="w-full bg-white px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Suggestions */}
+                <div className="flex flex-wrap gap-2 pt-1 items-center">
+                  <span className="text-[10px] font-bold text-slate-400">{isRtl ? '💡 اقتراح:' : '💡 Suggestions:'}</span>
+                  <button 
+                    type="button"
+                    onClick={() => { setCustName('زبون نقدي عام 👤'); setCustPhone('00000000'); }}
+                    className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-[10px] font-bold px-2.5 py-1 rounded-lg transition"
+                  >
+                    {isRtl ? 'زبون نقدي عام 👤' : 'Walk-in Customer 👤'}
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => { setCustName('صديق المحل الوفي حمزة'); setCustPhone('0111111111'); }}
+                    className="bg-pink-50 text-pink-700 hover:bg-pink-100 text-[10px] font-bold px-2.5 py-1 rounded-lg transition"
+                  >
+                    {isRtl ? 'صديق المحل الوفي حمزة' : 'Loyal Customer Hamza'}
+                  </button>
+                </div>
+
+                <div className="pt-4 border-t border-slate-200/50 flex justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setWizardStep(3)}
+                    className="flex items-center gap-1 text-slate-500 hover:text-slate-800 text-xs font-bold"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                    {isRtl ? 'السابق' : 'Previous'}
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl text-xs font-bold transition shadow-md shadow-indigo-600/15 cursor-pointer"
+                  >
+                    {isRtl ? 'حفظ ومتابعة' : 'Save and Continue'}
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Step 5: Product Setup Form */}
+            {wizardStep === 5 && (
+              <form onSubmit={submitProduct} className="space-y-4">
+                <div className="space-y-1">
+                  <h4 className="font-extrabold text-slate-800 text-sm flex items-center gap-1.5">
+                    <span className="text-indigo-600 text-base">📦</span>
+                    {isRtl ? 'إضافة أول منتج لتفعيل الكاشير ونقاط البيع 🎉' : 'Your First Product! 🎉'}
+                  </h4>
+                  <p className="text-[11px] text-slate-450 leading-normal">
+                    {isRtl 
+                      ? 'هنا يكمن السحر! حدد اسم البضاعة، تكلفتها، وسعر بيعها لتكسب الأرباح. ثم ابدأ فواتيرك!' 
+                      : 'Define your item name, cost, and selling price to calculate your profit automatically.'}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase font-bold text-slate-400">{isRtl ? 'اسم المنتج البضاعة' : 'Product Name'}</label>
+                    <input 
+                      type="text" 
+                      placeholder={isRtl ? 'مثال: شوكولاتة كادبوري اللذيذة' : 'e.g. Delicious Chocolate'}
+                      value={prodName}
+                      onChange={e => setProdName(e.target.value)}
+                      required
+                      className="w-full bg-white px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase font-bold text-slate-400">{isRtl ? 'رمز باركود للمسح السريع' : 'SKU / Barcode'}</label>
+                    <input 
+                      type="text" 
+                      placeholder="BARCODE-990"
+                      value={prodCode}
+                      onChange={e => setProdCode(e.target.value)}
+                      className="w-full bg-white px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase font-bold text-slate-400">{isRtl ? 'الكمية الابتدائية الحالية' : 'Stock Quantity'}</label>
+                    <input 
+                      type="number" 
+                      placeholder="10"
+                      value={prodQty}
+                      onChange={e => setProdQty(e.target.value)}
+                      className="w-full bg-white px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase font-bold text-slate-400">{isRtl ? 'سعر التكلفة الشراء' : 'Cost Price'}</label>
+                    <input 
+                      type="number" 
+                      step="0.01"
+                      placeholder="5.00"
+                      value={prodCost}
+                      onChange={e => setProdCost(e.target.value)}
+                      required
+                      className="w-full bg-white px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase font-bold text-slate-400">{isRtl ? 'سعر البيع للجمهور' : 'Selling Price'}</label>
+                    <input 
+                      type="number" 
+                      step="0.01"
+                      placeholder="8.00"
+                      value={prodPrice}
+                      onChange={e => setProdPrice(e.target.value)}
+                      required
+                      className="w-full bg-white px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase font-bold text-slate-400">{isRtl ? 'حد الطلب الأدنى' : 'Min Alert Qty'}</label>
+                    <input 
+                      type="number" 
+                      placeholder="2"
+                      value={prodMin}
+                      onChange={e => setProdMin(e.target.value)}
+                      className="w-full bg-white px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-slate-200/50 flex justify-between items-center">
+                  <button
+                    type="button"
+                    onClick={() => setWizardStep(4)}
+                    className="flex items-center gap-1 text-slate-500 hover:text-slate-800 text-xs font-bold"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                    {isRtl ? 'السابق' : 'Previous'}
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex items-center gap-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white px-6 py-3 rounded-2xl text-xs font-extrabold transition shadow-md shadow-emerald-500/15 cursor-pointer animate-pulse"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    {isRtl ? '🎉 تفعيل المحل وإنهاء التأسيس السعيد!' : '🎉 Launch Store & Finish Setup!'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+          </div>
+
+          {/* Quick links footer to bypass the wizard */}
+          <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+            <button
+              onClick={handleAutoConfigureDefaults}
+              className="text-slate-500 hover:text-indigo-600 font-bold transition flex items-center gap-1.5"
+            >
+              <Wand2 className="w-4 h-4 text-indigo-500" />
+              {isRtl ? 'تخطي تلقائي وتعبئة منتج افتراضي سريع ⚡' : 'Auto-fill single default item & skip setup ⚡'}
+            </button>
+            
+            <button
+              onClick={() => setSkipWizard(true)}
+              className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-xl font-bold transition"
+            >
+              {isRtl ? 'دخول لوحة التحكم فارغة مباشرة 🚀' : 'Enter empty dashboard anyway 🚀'}
+            </button>
+          </div>
+        </div>
+
+      </div>
+    );
+  }
+
+  // Calculate Core KPI Metrics
+  const metrics = (() => {
+    const totalUnique = products.length;
+    let totalQty = 0;
+    let totalCostVal = 0;
+    let totalSellVal = 0;
+    let lowStockCount = 0;
+
+    products.forEach(p => {
+      totalQty += p.quantity;
+      totalCostVal += p.quantity * p.costPrice;
+      totalSellVal += p.quantity * p.sellingPrice;
+      if (p.quantity <= p.minQuantity) {
+        lowStockCount++;
+      }
+    });
+
+    const expectedProfit = totalSellVal - totalCostVal;
+
+    return {
+      totalUnique,
+      totalQty,
+      totalCostVal,
+      totalSellVal,
+      expectedProfit,
+      lowStockCount
+    };
+  })();
+
+  // Prepare Category Stock Distribution Chart Data
+  const categoryData = (() => {
+    const counts: { [key: string]: { name: string; value: number } } = {};
+    
+    // Initialize with all categories
+    categories.forEach(cat => {
+      counts[cat.id] = {
+        name: cat.name.split(' | ')[language === 'ar' ? 1 : 0] || cat.name,
+        value: 0
+      };
+    });
+
+    products.forEach(p => {
+      if (counts[p.categoryId]) {
+        counts[p.categoryId].value += p.quantity;
+      }
+    });
+
+    return Object.values(counts).filter(c => c.value > 0);
+  })();
+
+  // Prepare Stock Flow over time Chart Data (In vs Out Transactions)
+  const transactionChartData = (() => {
+    const dailyTx: { [key: string]: { date: string; incoming: number; outgoing: number } } = {};
+
+    // Get last 7 calendar days with transactions or fill last 7 days
+    const last7Days = Array.from({ length: 7 }).map((_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      return d.toISOString().split('T')[0];
+    }).reverse();
+
+    last7Days.forEach(day => {
+      dailyTx[day] = {
+        date: day,
+        incoming: 0,
+        outgoing: 0
+      };
+    });
+
+    transactions.forEach(tx => {
+      const day = String(tx?.date ?? '').split('T')[0];
+      if (dailyTx[day]) {
+        if (tx.type === 'IN') {
+          dailyTx[day].incoming += tx.quantity;
+        } else {
+          dailyTx[day].outgoing += tx.quantity;
+        }
+      }
+    });
+
+    return Object.values(dailyTx).sort((a, b) => a.date.localeCompare(b.date));
+  })();
+
+  // Low stock items filtering for warning alerts
+  const lowStockProducts = (() => {
+    return products.filter(p => p.quantity <= p.minQuantity).slice(0, 4);
+  })();
+
+  // Comprehensive ERP Quick Access Bento Grid Section
+  const quickAccessBentoGrid = (() => {
+    return (
+      <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/60 shadow-xs space-y-5">
+        <div className="border-b border-slate-100 pb-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div>
+            <h3 className="font-extrabold text-slate-900 text-sm sm:text-base flex items-center gap-2">
+              <ClipboardList className="w-5 h-5 text-indigo-600" />
+              {language === 'ar' ? 'بوابة الوصول السريع والتحكم الشامل بالعمليات' : 'ERP Comprehensive Operations & Quick Access Portal'}
+            </h3>
+            <p className="text-[11px] text-slate-450 mt-1 font-semibold leading-relaxed">
+              {language === 'ar' 
+                ? 'انقر على أي كرت للانتقال الفوري للقسم المخصص وتجاوز أشرطة التمرير والتعقيد' 
+                : 'Click any card to navigate instantly to the respective department, bypassing scrollbars and layout bounds.'}
+            </p>
+          </div>
+          <span className="bg-indigo-50 text-indigo-700 text-[10px] font-black px-2.5 py-1 rounded-full uppercase tracking-wider self-start sm:self-center font-mono">
+            {language === 'ar' ? '16 قسماً نشطاً' : '16 Active Modules'}
+          </span>
+        </div>
+        
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {[
+            {
+              id: 'inventory',
+              titleAr: 'المخزون والمنتجات',
+              titleEn: 'Inventory & Products',
+              descAr: 'إضافة السلع، الجرد، وطباعة الباركود والتصدير',
+              descEn: 'Add products, count stock & print barcodes/slips',
+              icon: Package,
+              color: 'bg-indigo-50 text-indigo-600 hover:border-indigo-200 hover:bg-indigo-100/40',
+              action: () => onNavigate('inventory')
+            },
+            {
+              id: 'transactions',
+              titleAr: 'حركة المعاملات والوارد',
+              titleEn: 'Stock Flow & Movements',
+              descAr: 'توثيق الحركات الداخلة والخارجة وتسجيل التقرير',
+              descEn: 'Track inward/outward stock flow & slips history',
+              icon: ArrowLeftRight,
+              color: 'bg-emerald-50 text-emerald-600 hover:border-emerald-200 hover:bg-emerald-100/40',
+              action: () => onNavigate('transactions')
+            },
+            {
+              id: 'suppliers',
+              titleAr: 'سجل الموردين والحسابات',
+              titleEn: 'Suppliers Directory',
+              descAr: 'الشركات الموردة، العناوين، والمدفوعات الآجلة',
+              descEn: 'Manage suppliers, balances & contact info ledger',
+              icon: Users,
+              color: 'bg-purple-50 text-purple-600 hover:border-purple-200 hover:bg-purple-100/40',
+              action: () => onNavigate('suppliers')
+            },
+            {
+              id: 'customers',
+              titleAr: 'سجل العملاء والمديونيات',
+              titleEn: 'Customers & Ledger',
+              descAr: 'حسابات العملاء والديون والأرصدة المستحقة',
+              descEn: 'Outstanding debts, customer registry & receivables',
+              icon: Users,
+              color: 'bg-teal-50 text-teal-600 hover:border-teal-200 hover:bg-teal-100/40',
+              action: () => onNavigate('customers')
+            },
+            {
+              id: 'erp-sales',
+              titleAr: 'كاشير المبيعات (POS)',
+              titleEn: 'POS Cashier checkout',
+              descAr: 'نقطة المبيعات السريعة، طباعة الفواتير وخصم السلة',
+              descEn: 'Sell goods, input customer, scan barcode and print',
+              icon: ShoppingCart,
+              color: 'bg-indigo-50 text-indigo-600 hover:border-indigo-200 hover:bg-indigo-100/40',
+              action: () => onNavigateSubTab ? onNavigateSubTab('erp', 'sales') : onNavigate('erp')
+            },
+            {
+              id: 'erp-purchases',
+              titleAr: 'شراء وتوريد مخزني',
+              titleEn: 'Supplier Stock Inward',
+              descAr: 'تمويل مستند بضائع الموردين وتخصيص الدفع الفوري',
+              descEn: 'Restock, track prices paid, map current quantities',
+              icon: ShoppingBag,
+              color: 'bg-emerald-50 text-emerald-600 hover:border-emerald-200 hover:bg-emerald-100/40',
+              action: () => onNavigateSubTab ? onNavigateSubTab('erp', 'purchases') : onNavigate('erp')
+            },
+            {
+              id: 'erp-treasury',
+              titleAr: 'الخزينة والسيولة',
+              titleEn: 'Treasury & Cash Safe',
+              descAr: 'تسوية الصندوق يدوياً، مراقبة الكاش والتحويلات',
+              descEn: 'Settle safe box ledger, verify immediate balances',
+              icon: Coins,
+              color: 'bg-violet-50 text-violet-600 hover:border-violet-200 hover:bg-violet-100/40',
+              action: () => onNavigateSubTab ? onNavigateSubTab('erp', 'treasury') : onNavigate('erp')
+            },
+            {
+              id: 'erp-returns',
+              titleAr: 'مرتجع المبيعات والمشتريات',
+              titleEn: 'Refunds & Returns',
+              descAr: 'استرجاع الفواتير وصرف السندات المالية المقابلة',
+              descEn: 'Process refund/returns & issue receipt credits logs',
+              icon: Undo2,
+              color: 'bg-rose-50 text-rose-600 hover:border-rose-200 hover:bg-rose-100/40',
+              action: () => onNavigateSubTab ? onNavigateSubTab('erp', 'returns') : onNavigate('erp')
+            },
+            {
+              id: 'erp-expenses',
+              titleAr: 'المصاريف والتشغيل',
+              titleEn: 'Operational Expenses',
+              descAr: 'تسجيل الرواتب، الإيجار، المصاريف النثرية والعمومية',
+              descEn: 'Log active overheads, maintenance, utility vouchers',
+              icon: TrendingDown,
+              color: 'bg-orange-50 text-orange-600 hover:border-orange-200 hover:bg-orange-100/40',
+              action: () => onNavigateSubTab ? onNavigateSubTab('erp', 'expenses') : onNavigate('erp')
+            },
+            {
+              id: 'erp-transfers',
+              titleAr: 'تحويل بين المستودعات',
+              titleEn: 'Inter-warehouse GTN',
+              descAr: 'شحن ونقل بضائع من مخزن لآخر بمستند رسمي معتمد',
+              descEn: 'Log transfer notes, distribute item volumes safely',
+              icon: Shuffle,
+              color: 'bg-sky-50 text-sky-600 hover:border-sky-200 hover:bg-sky-100/40',
+              action: () => onNavigateSubTab ? onNavigateSubTab('erp', 'transfers') : onNavigate('erp')
+            },
+            {
+              id: 'erp-vouchers',
+              titleAr: 'السندات والتحصيل',
+              titleEn: 'Vouchers & Collections',
+              descAr: 'تسجيل قبض وصرف للعملاء والموردين الحاليين مع تحديث الحركة وإصدار إيصال',
+              descEn: 'Post receipts and payments to existing customer and supplier ledgers with printable receipts',
+              icon: Users,
+              color: 'bg-teal-50 text-teal-600 hover:border-teal-200 hover:bg-teal-100/40',
+              action: () => onNavigateSubTab ? onNavigateSubTab('erp', 'vouchers') : onNavigate('erp')
+            },
+            {
+              id: 'erp-team',
+              titleAr: 'فريق العمل والرواتب',
+              titleEn: 'Team & Staff Wages',
+              descAr: 'تسجيل الموظفين، تحديد الرواتب الشهرية والعمولات والمستحقات',
+              descEn: 'Register crew members, salary structures, cash disbursements',
+              icon: Users,
+              color: 'bg-indigo-50 text-indigo-600 hover:border-indigo-200 hover:bg-indigo-100/40',
+              action: () => onNavigateSubTab ? onNavigateSubTab('erp', 'team') : onNavigate('erp')
+            },
+            {
+              id: 'erp-partners',
+              titleAr: 'حصص الشركاء والأرباح',
+              titleEn: 'Shareholders & Capital Equity',
+              descAr: 'توزيع حصص الشركاء والمستثمرين ومتابعة الأرباح الرأسمالية',
+              descEn: 'Manage stakeholder shares, dynamic dividend payouts, cash limits',
+              icon: Scale,
+              color: 'bg-purple-50 text-purple-600 hover:border-purple-200 hover:bg-purple-100/40',
+              action: () => onNavigateSubTab ? onNavigateSubTab('erp', 'partners') : onNavigate('erp')
+            },
+            {
+              id: 'erp-services',
+              titleAr: 'الخدمات والصيانة المهنية ⚙️',
+              titleEn: 'Professional Services & Repairs ⚙️',
+              descAr: 'تقديم الخدمات غير الملموسة والمصنعية والصيانة لعملائك ومتابعتها',
+              descEn: 'Track intangible billable tasks, consultancy fees and custom labor orders',
+              icon: Wrench,
+              color: 'bg-teal-50 text-teal-600 hover:border-teal-200 hover:bg-teal-100/40',
+              action: () => onNavigateSubTab ? onNavigateSubTab('erp', 'services') : onNavigate('erp')
+            },
+            {
+              id: 'erp-recycle-bin',
+              titleAr: 'سلة المحذوفات',
+              titleEn: 'Recycle Bin',
+              descAr: 'استعادة السجلات المحذوفة أو حذفها نهائياً من قاعدة البيانات',
+              descEn: 'Restore deleted records or permanently purge them from the database',
+              icon: Trash2,
+              color: 'bg-rose-50 text-rose-600 hover:border-rose-200 hover:bg-rose-100/40',
+              action: () => onNavigateSubTab ? onNavigateSubTab('erp', 'recycleBin') : onNavigate('erp')
+            },
+            {
+              id: 'erp-devices',
+              titleAr: 'إدارة ملحقات النظام والطباعة',
+              titleEn: 'Devices & Print Settings',
+              descAr: 'ربط طابعات البلوتوث والواي فاي والشبكة وتجربة الطباعة',
+              descEn: 'Configure Bluetooth/WiFi POS ESC/POS hardware connections',
+              icon: Printer,
+              color: 'bg-slate-50 text-slate-600 hover:border-slate-200 hover:bg-slate-100/40',
+              action: () => onNavigateSubTab ? onNavigateSubTab('erp', 'devices') : onNavigate('erp')
+            }
+          ].map(item => {
+            const IconComponent = item.icon;
+            return (
+              <button
+                key={item.id}
+                onClick={item.action}
+                className="flex items-start p-4 border border-slate-200/65 hover:border-indigo-300 hover:shadow-xs hover:bg-indigo-50/10 rounded-2xl transition-all duration-200 text-start gap-3.5 group cursor-pointer relative overflow-hidden"
+              >
+                <div className={`p-2.5 rounded-xl transition-all duration-200 ${item.color} group-hover:scale-105 shrink-0`}>
+                  <IconComponent className="w-5 h-5" />
+                </div>
+                <div className="space-y-0.5 min-w-0">
+                  <p className="font-extrabold text-slate-800 text-xs truncate group-hover:text-indigo-600 transition-colors">
+                    {language === 'ar' ? item.titleAr : item.titleEn}
+                  </p>
+                  <p className="text-[10px] text-slate-450 font-semibold leading-normal line-clamp-2">
+                    {language === 'ar' ? item.descAr : item.descEn}
+                  </p>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  })();
+
+  // Pie chart colors
+  const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+
+  return (
+    <div className="space-y-6" dir={isRtl ? 'rtl' : 'ltr'}>
+      {/* Welcome banner */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between bg-gradient-to-r from-[#0f172a] via-[#1e293b] to-[#334155] rounded-2xl p-6 text-white shadow-lg border border-slate-800 relative overflow-hidden">
+        <div className="relative z-10 space-y-2">
+          <span className="bg-indigo-500 text-white text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full">
+            {isRtl ? 'متجرك جاهز للتشغيل' : 'Store Online'}
+          </span>
+          <h2 className="text-2xl font-black font-sans tracking-tight text-white flex items-center gap-2">
+            {t.appTitle}
+            {isDatabaseEmpty && (
+              <span className="text-amber-400 text-xs font-bold animate-pulse">({isRtl ? 'فارغ وبانتظار التأسيس' : 'Fresh Start'})</span>
+            )}
+          </h2>
+          <p className="text-slate-300 max-w-xl text-xs font-semibold leading-relaxed">
+            {t.appSubTitle}
+          </p>
+        </div>
+        <div className="mt-4 md:mt-0 relative z-10 flex gap-3 flex-wrap items-center">
+          
+          {/* Quick-Re-setup Button to help return to setup wizard anytime! */}
+          {isDatabaseEmpty && skipWizard && (
+            <button
+              onClick={() => setSkipWizard(false)}
+              className="flex items-center gap-2 bg-gradient-to-r from-indigo-500 to-indigo-600 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition shadow-md shadow-indigo-500/20 cursor-pointer"
+            >
+              <Wand2 className="w-4 h-4 animate-bounce" />
+              {isRtl ? 'تشغيل معالج التأسيس السحري 🌟' : 'Launch Setup Wizard 🌟'}
+            </button>
+          )}
+
+          {/* Low Stock Alert Bell Button */}
+          <button
+            onClick={() => setShowLowStockModal(true)}
+            className="flex items-center gap-2 bg-gradient-to-r from-slate-800 to-slate-900 hover:from-slate-900 hover:to-black text-white px-4 py-2.5 rounded-xl text-xs font-bold transition border border-slate-700 shadow-sm relative cursor-pointer"
+          >
+            <Bell className="w-4 h-4 text-amber-400" />
+            <span>{isRtl ? 'جرس التنبيهات' : 'Alerts Bell'}</span>
+            {products.filter(p => p.quantity <= p.minQuantity).length > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-white font-mono text-[9px] font-black w-5 h-5 flex items-center justify-center rounded-full animate-pulse border-2 border-slate-900">
+                {products.filter(p => p.quantity <= p.minQuantity).length}
+              </span>
+            )}
+          </button>
+
+          <button 
+            id="btn-ai-audit-dash"
+            onClick={onTriggerAiAudit}
+            className="flex items-center gap-2 bg-gradient-to-r from-slate-700 to-slate-800 text-white hover:from-slate-800 hover:to-slate-900 px-4 py-2.5 rounded-xl text-xs font-bold transition border border-slate-700 shadow-sm"
+          >
+            <Sparkles className="w-4 h-4 text-indigo-400" />
+            {t.aiAuditButton}
+          </button>
+        </div>
+        {/* Abstract background decorative shape */}
+        <div className="absolute right-0 top-0 w-64 h-64 bg-indigo-500 rounded-full filter blur-3xl opacity-10 transform translate-x-12 -translate-y-12"></div>
+      </div>
+
+      {/* Warning banner for low stock */}
+      {metrics.lowStockCount > 0 && (
+        <div className="bg-amber-50/60 border-l-4 border-amber-500 p-4 rounded-xl flex items-start gap-3 shadow-3xs animate-bounce">
+          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <h4 className="font-bold text-amber-850 text-sm">{t.lowStockAlerts} ({metrics.lowStockCount})</h4>
+            <p className="text-amber-700 text-xs mt-0.5">{t.lowStockWarning}</p>
+          </div>
+        </div>
+      )}
+
+      {/* KPI Cards Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
+        {/* Card 1: Total Products */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-xs flex items-center justify-between">
+          <div className="space-y-1">
+            <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">{t.totalProducts}</p>
+            <p className="text-3xl font-black text-slate-800 font-mono">{metrics.totalUnique}</p>
+          </div>
+          <div className="p-3 bg-indigo-50/70 text-indigo-650 rounded-xl">
+            <Package className="w-6 h-6" />
+          </div>
+        </div>
+
+        {/* Card 2: Total Stock Qty */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-xs flex items-center justify-between">
+          <div className="space-y-1">
+            <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">{t.totalStockQty}</p>
+            <p className="text-3xl font-black text-slate-800 font-mono">{metrics.totalQty}</p>
+          </div>
+          <div className="p-3 bg-emerald-50/70 text-emerald-650 rounded-xl">
+            <Layers className="w-6 h-6" />
+          </div>
+        </div>
+
+        {/* Card 3: Total Stock Value (Cost) */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-xs flex items-center justify-between">
+          <div className="space-y-1">
+            <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">{t.totalValue}</p>
+            <p className="text-3xl font-black text-slate-800 font-mono">{currencySymbol} {metrics.totalCostVal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+          </div>
+          <div className="p-3 bg-indigo-50/70 text-indigo-650 rounded-xl">
+            <DollarSign className="w-6 h-6" />
+          </div>
+        </div>
+
+        {/* Card 4: Expected Selling value */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-xs flex items-center justify-between">
+          <div className="space-y-1">
+            <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">{t.totalSellingValue}</p>
+            <p className="text-3xl font-black text-slate-800 font-mono">{currencySymbol} {metrics.totalSellVal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+          </div>
+          <div className="p-3 bg-violet-50/70 text-violet-650 rounded-xl">
+            <TrendingUp className="w-6 h-6" />
+          </div>
+        </div>
+
+        {/* Card 5: Expected Profits */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-xs flex items-center justify-between">
+          <div className="space-y-1">
+            <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">{t.expectedProfit}</p>
+            <p className="text-3xl font-black text-emerald-600 font-mono">{currencySymbol} {metrics.expectedProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+          </div>
+          <div className="p-3 bg-teal-50/70 text-teal-650 rounded-xl">
+            <TrendingUp className="w-6 h-6" />
+          </div>
+        </div>
+      </div>
+
+      {/* Comprehensive ERP Quick Access Bento Grid Section */}
+      {quickAccessBentoGrid}
+
+      {/* Visual Analytics Charts Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Transaction Flow Area Chart */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-xs lg:col-span-2 space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+              <ClipboardList className="w-4 h-4 text-indigo-500" />
+              {t.recentTransactions} (7 {language === 'ar' ? 'أيام الأخيرة' : 'Days Flow'})
+            </h3>
+            <div className="flex gap-4 text-xs font-semibold">
+              <span className="flex items-center gap-1.5 text-emerald-600">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span>
+                {t.stockIn}
+              </span>
+              <span className="flex items-center gap-1.5 text-amber-600">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block"></span>
+                {t.stockOut}
+              </span>
+            </div>
+          </div>
+          <div className="h-72 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={transactionChartData}>
+                <defs>
+                  <linearGradient id="colorIncoming" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                  </linearGradient>
+                  <linearGradient id="colorOutgoing" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.2}/>
+                    <stop offset="95%" stopColor="#f59e0b" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis 
+                  dataKey="date" 
+                  stroke="#94a3b8" 
+                  fontSize={10} 
+                  tickLine={false} 
+                  tickFormatter={(tick) => {
+                    const parts = tick.split('-');
+                    return `${parts[1]}/${parts[2]}`;
+                  }}
+                />
+                <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} />
+                <Tooltip 
+                  contentStyle={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '11px' }}
+                  labelFormatter={(label) => `${t.txDate}: ${label}`}
+                />
+                <Area type="monotone" name={t.stockIn} dataKey="incoming" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorIncoming)" />
+                <Area type="monotone" name={t.stockOut} dataKey="outgoing" stroke="#f59e0b" strokeWidth={2} fillOpacity={1} fill="url(#colorOutgoing)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Category distribution Pie Chart */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-xs space-y-4">
+          <div className="border-b border-slate-100 pb-3">
+            <h3 className="font-bold text-slate-800 text-sm">
+              {language === 'ar' ? 'توزيع الكميات حسب الفئة' : 'Stock by Category'}
+            </h3>
+          </div>
+          <div className="h-60 w-full relative flex items-center justify-center">
+            {categoryData.length === 0 ? (
+              <p className="text-slate-400 text-xs font-sans text-center">{t.noData}</p>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={categoryData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={60}
+                    outerRadius={80}
+                    paddingAngle={3}
+                    dataKey="value"
+                  >
+                    {categoryData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(value) => [`${value} units`, 'Quantity']} />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
+            {/* Center label */}
+            <div className="absolute flex flex-col items-center justify-center">
+              <span className="text-[10px] uppercase font-bold text-slate-400">{language === 'ar' ? 'إجمالي القطع' : 'Total Units'}</span>
+              <span className="text-2xl font-black text-slate-800 font-mono leading-none mt-1">{metrics.totalQty}</span>
+            </div>
+          </div>
+          {/* Legend */}
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            {categoryData.map((item, index) => (
+              <div key={item.name} className="flex items-center gap-1.5 text-slate-600 truncate font-semibold">
+                <span 
+                  className="w-2.5 h-2.5 rounded-full shrink-0" 
+                  style={{ backgroundColor: COLORS[index % COLORS.length] }}
+                ></span>
+                <span className="truncate">{item.name}</span>
+                <span className="font-mono text-[10px] text-slate-450">({item.value})</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Low Stock Notifications Alert Modal Overlay */}
+      {showLowStockModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4" dir={isRtl ? 'rtl' : 'ltr'}>
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto flex flex-col animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50 rounded-t-2xl">
+              <div className="flex items-center gap-2">
+                <Bell className="w-5 h-5 text-amber-500 animate-bounce" />
+                <div>
+                  <h3 className="font-extrabold text-slate-800 text-base">{isRtl ? 'جرس تنبيهات المخزون المنخفض' : 'Low Stock Notifications & Alerts'}</h3>
+                  <p className="text-[10px] text-slate-450 font-bold">{isRtl ? 'إدارة النواقص والطلب السريع والربط بالمستودعات' : 'Manage stock shortages & quick restock orders mapped to warehouses'}</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => { setShowLowStockModal(false); setSelectedRestockProd(null); }}
+                className="text-slate-400 hover:text-slate-600 font-bold text-lg p-1.5 hover:bg-slate-150 rounded-xl transition cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 overflow-y-auto flex-1 space-y-4">
+              {products.filter(p => p.quantity <= p.minQuantity).length === 0 ? (
+                <div className="text-center py-10 space-y-3">
+                  <span className="text-4xl">🎉</span>
+                  <p className="text-slate-800 font-extrabold text-sm">{isRtl ? 'المستودعات آمنة بنسبة 100%!' : 'Warehouses are 100% safe!'}</p>
+                  <p className="text-slate-450 text-xs font-semibold">{isRtl ? 'جميع المنتجات كمياتها ممتازة وفوق حدود الأمان والتنبيه.' : 'All products have adequate stock levels above warning limits.'}</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-xs text-slate-500 font-semibold">{isRtl ? 'المنتجات التالية انخفضت كميتها عن حد الأمان بالكامل:' : 'The following products are running low on stock:'}</p>
+                  
+                  {products.filter(p => p.quantity <= p.minQuantity).map(p => {
+                    const wh = warehouses.find(w => w.id === p.warehouseId);
+                    const sup = suppliers.find(s => s.id === p.supplierId);
+                    return (
+                      <div key={p.id} className="p-4 bg-slate-50 hover:bg-slate-100/70 rounded-xl border border-slate-200/80 transition flex flex-col md:flex-row md:items-center justify-between gap-3">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+                            <span className="font-extrabold text-slate-800 text-sm">{p.name}</span>
+                            <span className="text-[10px] bg-slate-200 text-slate-700 font-mono px-1.5 py-0.5 rounded">SKU: {p.code}</span>
+                          </div>
+                          
+                          <div className="text-xs text-slate-500 font-medium space-y-0.5">
+                            <p className="flex items-center gap-1">
+                              <span className="font-bold">{isRtl ? 'المستودع المرتبط به:' : 'Associated Warehouse:'}</span> 
+                              <span className="text-indigo-600 font-bold">{wh ? wh.name : (isRtl ? 'غير محدد' : 'Not Specified')}</span>
+                              {wh?.location && <span className="text-slate-400">({wh.location})</span>}
+                            </p>
+                            <p className="flex items-center gap-1">
+                              <span className="font-bold">{isRtl ? 'المورد المعتمد:' : 'Preferred Supplier:'}</span>
+                              <span className="text-slate-700">{sup ? sup.name : (isRtl ? 'غير محدد' : 'Not Specified')}</span>
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between md:justify-end gap-4 border-t md:border-t-0 pt-2 md:pt-0">
+                          <div className="text-right">
+                            <p className="text-xs font-bold text-rose-600 font-mono">
+                              {isRtl ? 'الكمية الحالية:' : 'Current Qty:'} {p.quantity} / {isRtl ? 'الحد الأدنى:' : 'Min Limit:'} {p.minQuantity}
+                            </p>
+                            <span className="inline-block px-1.5 py-0.5 text-[9px] font-black rounded bg-rose-100 text-rose-700 mt-0.5">
+                              {p.quantity === 0 ? (isRtl ? 'نفذت الكمية 🚫' : 'Out of Stock 🚫') : (isRtl ? 'مخزون منخفض ⚠️' : 'Low Stock ⚠️')}
+                            </span>
+                          </div>
+
+                          <button
+                            onClick={() => {
+                              setSelectedRestockProd(p);
+                              setRestockQty(Math.max(1, p.minQuantity * 2 - p.quantity));
+                              setRestockCost(p.costPrice);
+                              setRestockSupplierId(p.supplierId || (suppliers[0]?.id || ''));
+                              setRestockWarehouseId(p.warehouseId || (warehouses[0]?.id || ''));
+                            }}
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-3.5 py-2 rounded-xl transition cursor-pointer"
+                          >
+                            {isRtl ? 'اتخاذ إجراء 🛠️' : 'Take Action 🛠️'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Subform: Action/Quick Restock */}
+              {selectedRestockProd && (
+                <form onSubmit={handleQuickRestock} className="mt-6 border-t border-indigo-100 pt-5 space-y-4 bg-indigo-50/40 p-4 rounded-xl border border-indigo-50 animate-in slide-in-from-bottom duration-150">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-bold text-xs text-indigo-950 flex items-center gap-1.5">
+                      <Package className="w-4 h-4 text-indigo-500" />
+                      {isRtl ? `طلب تمويل مستودع مستعجل للسلعة: ${selectedRestockProd.name}` : `Emergency Stock Funding for: ${selectedRestockProd.name}`}
+                    </h4>
+                    <button 
+                      type="button"
+                      onClick={() => setSelectedRestockProd(null)}
+                      className="text-indigo-650 hover:text-indigo-800 text-xs font-bold animate-pulse"
+                    >
+                      {isRtl ? 'إلغاء الإجراء' : 'Cancel Action'}
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-650 mb-1">{isRtl ? 'الكمية المشتراة المراد إضافتها للمستودع *' : 'Purchase Qty to Add *'}</label>
+                      <input 
+                        type="number" 
+                        required
+                        min="1"
+                        value={restockQty}
+                        onChange={(e) => setRestockQty(Math.max(1, Number(e.target.value)))}
+                        className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 font-bold text-slate-800"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-650 mb-1">{isRtl ? `تكلفة شراء القطعة الواحد (${currencySymbol}) *` : `Unit Cost Price (${currencySymbol}) *`}</label>
+                      <input 
+                        type="number" 
+                        required
+                        step="0.01"
+                        min="0.01"
+                        value={restockCost}
+                        onChange={(e) => setRestockCost(Math.max(0.01, Number(e.target.value)))}
+                        className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 font-bold text-slate-800"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-650 mb-1">{isRtl ? 'المورد المعتمد للفاتورة *' : 'Supplier Registry *'}</label>
+                      <select
+                        required
+                        value={restockSupplierId}
+                        onChange={(e) => setRestockSupplierId(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 font-bold text-slate-800"
+                      >
+                        <option value="">{isRtl ? '-- حدد مورد الفاتورة --' : '-- Select Supplier --'}</option>
+                        {suppliers.map(s => (
+                          <option key={s.id} value={s.id}>{s.name} {s.company ? `(${s.company})` : ''}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-650 mb-1">{isRtl ? 'المستودع المستهدف للإيداع *' : 'Target Warehouse *'}</label>
+                      <select
+                        required
+                        value={restockWarehouseId}
+                        onChange={(e) => setRestockWarehouseId(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 font-bold text-slate-800"
+                      >
+                        <option value="">{isRtl ? '-- حدد المستودع --' : '-- Select Warehouse --'}</option>
+                        {warehouses.map(w => (
+                          <option key={w.id} value={w.id}>{w.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-650 mb-1">{isRtl ? 'طريقة دفع تكلفة الشحنة' : 'Payment Type'}</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setRestockPayMethod('CASH')}
+                          className={`py-1.5 rounded-xl border text-center font-bold transition cursor-pointer ${
+                            restockPayMethod === 'CASH' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200'
+                          }`}
+                        >
+                          {isRtl ? 'نقداً من الصندوق' : 'Cash Safe Box'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRestockPayMethod('DEBT')}
+                          className={`py-1.5 rounded-xl border text-center font-bold transition cursor-pointer ${
+                            restockPayMethod === 'DEBT' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200'
+                          }`}
+                        >
+                          {isRtl ? 'آجل على الحساب' : 'Supplier Debt'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col justify-end">
+                      <div className="p-2.5 bg-indigo-100/50 border border-indigo-200 rounded-xl text-center">
+                        <p className="text-[10px] text-indigo-950 font-semibold">{isRtl ? 'إجمالي قيمة الشراء والتوريد:' : 'Total Restock Billing cost:'}</p>
+                        <p className="text-base font-black text-indigo-700 font-mono">{currencySymbol} {(restockQty * restockCost).toFixed(2)}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 rounded-xl transition cursor-pointer shadow-md shadow-emerald-600/10"
+                  >
+                    {isRtl ? '✓ تأكيد عملية الشراء والتسجيل الفوري لحساب السلع' : '✓ Confirm & Register Emergency Stock Purchase'}
+                  </button>
+                </form>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end rounded-b-2xl">
+              <button 
+                onClick={() => { setShowLowStockModal(false); setSelectedRestockProd(null); }}
+                className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-xs px-4 py-2 rounded-xl transition cursor-pointer"
+              >
+                {isRtl ? 'إغلاق' : 'Close'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

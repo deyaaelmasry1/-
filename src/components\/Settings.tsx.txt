@@ -1,0 +1,519 @@
+import React, { useState, useRef } from 'react';
+import { 
+  Building2, 
+  MapPin, 
+  Phone, 
+  Upload, 
+  Download, 
+  RefreshCw, 
+  Trash2, 
+  Image as ImageIcon, 
+  CheckCircle,
+  FileJson,
+  ShieldCheck,
+  AlertTriangle
+} from 'lucide-react';
+import { Language } from '../utils/translations';
+import { 
+  Product, 
+  Category, 
+  Supplier, 
+  Transaction, 
+  Customer, 
+  Warehouse, 
+  WarehouseTransfer, 
+  Expense, 
+  TeamMember, 
+  Partner 
+} from '../types';
+
+interface SettingsProps {
+  language: Language;
+  companyName: string;
+  setCompanyName: (name: string) => void;
+  companyAddress: string;
+  setCompanyAddress: (address: string) => void;
+  companyPhone: string;
+  setCompanyPhone: (phone: string) => void;
+  companyLogo: string;
+  setCompanyLogo: (logo: string) => void;
+  currencySymbol: string;
+  setCurrencySymbol: (symbol: string) => void;
+
+  products: Product[];
+  setProducts: React.Dispatch<React.SetStateAction<Product[]>>;
+  categories: Category[];
+  setCategories: React.Dispatch<React.SetStateAction<Category[]>>;
+  suppliers: Supplier[];
+  setSuppliers: React.Dispatch<React.SetStateAction<Supplier[]>>;
+  transactions: Transaction[];
+  setTransactions: React.Dispatch<React.SetStateAction<Transaction[]>>;
+  chatHistory: any[];
+  setChatHistory: React.Dispatch<React.SetStateAction<any[]>>;
+  customers: Customer[];
+  setCustomers: React.Dispatch<React.SetStateAction<Customer[]>>;
+  warehouses: Warehouse[];
+  setWarehouses: React.Dispatch<React.SetStateAction<Warehouse[]>>;
+  transfers: WarehouseTransfer[];
+  setTransfers: React.Dispatch<React.SetStateAction<WarehouseTransfer[]>>;
+  expenses: Expense[];
+  setExpenses: React.Dispatch<React.SetStateAction<Expense[]>>;
+  teamMembers: TeamMember[];
+  setTeamMembers: React.Dispatch<React.SetStateAction<TeamMember[]>>;
+  partners: Partner[];
+  setPartners: React.Dispatch<React.SetStateAction<Partner[]>>;
+
+  handleBackupDatabase: () => void;
+  handleRestoreDatabase: (file: File) => void;
+  handleSyncDatabase: (file: File) => void;
+  handleClearAllData: () => void;
+  showToast: (msg: string, type?: 'success' | 'error') => void;
+}
+
+export default function Settings({
+  language,
+  companyName,
+  setCompanyName,
+  companyAddress,
+  setCompanyAddress,
+  companyPhone,
+  setCompanyPhone,
+  companyLogo,
+  setCompanyLogo,
+  currencySymbol,
+  setCurrencySymbol,
+
+  products,
+  setProducts,
+  categories,
+  setCategories,
+  suppliers,
+  setSuppliers,
+  transactions,
+  setTransactions,
+  chatHistory,
+  setChatHistory,
+  customers,
+  setCustomers,
+  warehouses,
+  setWarehouses,
+  transfers,
+  setTransfers,
+  expenses,
+  setExpenses,
+  teamMembers,
+  setTeamMembers,
+  partners,
+  setPartners,
+
+  handleBackupDatabase,
+  handleRestoreDatabase,
+  handleSyncDatabase,
+  handleClearAllData,
+  showToast
+}: SettingsProps) {
+  const isRtl = language === 'ar';
+  
+  // Drag and drop states
+  const [isLogoDragging, setIsLogoDragging] = useState(false);
+  const [isRestoreDragging, setIsRestoreDragging] = useState(false);
+  const [isSyncDragging, setIsSyncDragging] = useState(false);
+
+  const logoInputRef = useRef<HTMLInputElement>(null);
+  const restoreInputRef = useRef<HTMLInputElement>(null);
+  const syncInputRef = useRef<HTMLInputElement>(null);
+
+  // Logo upload processing
+  const processLogoFile = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      showToast(isRtl ? 'الرجاء اختيار ملف صورة صالح!' : 'Please select a valid image file!', 'error');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      if (e.target?.result) {
+        setCompanyLogo(e.target.result as string);
+        showToast(isRtl ? 'تم رفع شعار المشروع بنجاح!' : 'Project logo uploaded successfully!', 'success');
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleLogoDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsLogoDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      processLogoFile(file);
+    }
+  };
+
+  const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processLogoFile(file);
+    }
+  };
+
+  // Restore processing
+  const processRestoreFile = (file: File) => {
+    if (file.type !== 'application/json' && !file.name.endsWith('.json')) {
+      showToast(isRtl ? 'الرجاء اختيار ملف JSON صالح للاستعادة!' : 'Please select a valid JSON file for restoration!', 'error');
+      return;
+    }
+    const confirmMsg = isRtl
+      ? 'تحذير: الاستعادة ستقوم بمسح واستبدال كافة بياناتك الحالية بالكامل! هل ترغب في الاستمرار؟'
+      : 'Warning: Restoration will completely overwrite and replace all your current data! Do you want to proceed?';
+    if (window.confirm(confirmMsg)) {
+      handleRestoreDatabase(file);
+    }
+  };
+
+  const handleRestoreDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsRestoreDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      processRestoreFile(file);
+    }
+  };
+
+  const handleRestoreChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processRestoreFile(file);
+    }
+  };
+
+  // Sync processing
+  const processSyncFile = (file: File) => {
+    if (file.type !== 'application/json' && !file.name.endsWith('.json')) {
+      showToast(isRtl ? 'الرجاء اختيار ملف JSON صالح للمزامنة!' : 'Please select a valid JSON file for synchronization!', 'error');
+      return;
+    }
+    handleSyncDatabase(file);
+  };
+
+  const handleSyncDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsSyncDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      processSyncFile(file);
+    }
+  };
+
+  const handleSyncChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processSyncFile(file);
+    }
+  };
+
+  const removeLogo = () => {
+    setCompanyLogo('');
+    showToast(isRtl ? 'تم إزالة الشعار بنجاح!' : 'Logo removed successfully!', 'success');
+  };
+
+  return (
+    <div className="space-y-6 max-w-5xl mx-auto pb-12" dir={isRtl ? 'rtl' : 'ltr'}>
+      {/* Tab Header Card */}
+      <div className="bg-slate-900 text-white rounded-3xl p-6 shadow-xl border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-black flex items-center gap-2">
+            <Building2 className="w-6 h-6 text-indigo-400" />
+            {isRtl ? 'إعدادات المشروع والبيانات العامة' : 'Project Settings & General Configurations'}
+          </h2>
+          <p className="text-xs text-slate-400 mt-1">
+            {isRtl 
+              ? 'تخصيص الهوية البصرية للمشروع، إدارة وتعديل الفواتير، والتحكم في النسخ الاحتياطي والمزامنة الذكية.' 
+              : 'Customize project visual identity, invoice configurations, backups, and smart database synchronization.'}
+          </p>
+        </div>
+        <div className="flex items-center gap-1.5 self-start md:self-auto">
+          <span className="bg-indigo-950 text-indigo-400 text-[10px] font-bold font-mono px-3 py-1 rounded-full border border-indigo-900 uppercase">
+            Active Workspace
+          </span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left Column: Company & Branding Details */}
+        <div className="lg:col-span-2 space-y-6">
+          {/* Company Information Form */}
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-150 space-y-5">
+            <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+              <Building2 className="w-5 h-5 text-indigo-600" />
+              <h3 className="font-bold text-sm text-slate-800">
+                {isRtl ? 'بيانات وهوية المنشأة' : 'Enterprise & Company Details'}
+              </h3>
+            </div>
+
+            <div className="space-y-4 text-xs font-semibold">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    {isRtl ? 'اسم المشروع / الشركة *' : 'Project / Company Name *'}
+                  </label>
+                  <div className="relative">
+                    <input 
+                      type="text"
+                      value={companyName}
+                      onChange={(e) => setCompanyName(e.target.value)}
+                      placeholder={isRtl ? 'مثال: مؤسسة خالد الغامدي التجارية' : 'e.g. Al-Ghamdi Trading Est.'}
+                      className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:bg-white rounded-xl py-2 px-3 pl-9 font-bold text-xs text-slate-800 transition outline-none"
+                    />
+                    <Building2 className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    {isRtl ? 'رقم الهاتف / الجوال' : 'Phone / Contact Number'}
+                  </label>
+                  <div className="relative">
+                    <input 
+                      type="text"
+                      value={companyPhone}
+                      onChange={(e) => setCompanyPhone(e.target.value)}
+                      placeholder="+966..."
+                      className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:bg-white rounded-xl py-2 px-3 pl-9 font-bold text-xs font-mono text-slate-850 transition outline-none"
+                    />
+                    <Phone className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  {isRtl ? 'العنوان الجغرافي / المقر الرئيسي' : 'Physical Address / Headquarters'}
+                </label>
+                <div className="relative">
+                  <input 
+                    type="text"
+                    value={companyAddress}
+                    onChange={(e) => setCompanyAddress(e.target.value)}
+                    placeholder={isRtl ? 'مثال: شارع الملك فهد، الرياض، المملكة العربية السعودية' : 'e.g. King Fahd Road, Riyadh, KSA'}
+                    className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:bg-white rounded-xl py-2 px-3 pl-9 text-xs text-slate-800 transition outline-none"
+                  />
+                  <MapPin className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-100">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  {isRtl ? 'رمز أو مسمى العملة في البرنامج' : 'System Currency Symbol / Name'}
+                </label>
+                <div className="relative">
+                  <input 
+                    type="text"
+                    value={currencySymbol}
+                    onChange={(e) => setCurrencySymbol(e.target.value)}
+                    placeholder={isRtl ? 'ج.م' : '$'}
+                    className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:bg-white rounded-xl py-2 px-3 pl-9 text-xs font-black text-indigo-700 tracking-wide transition outline-none"
+                  />
+                  <span className="absolute left-3 top-2 text-xs font-bold text-slate-400">
+                    {isRtl ? 'الرمز' : 'Sym'}
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-450 mt-1 leading-relaxed">
+                  {isRtl 
+                    ? 'سيتم استخدام هذا الرمز في جميع الفواتير والمطبوعات والتقارير المالية وحسابات الذمم والديون للموردين والعملاء.' 
+                    : 'This currency symbol will be fully integrated across cash registers, invoice printing, ledger sheets, and financial audits.'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Smart Synchronization & Merging Section */}
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-150 space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <RefreshCw className="w-5 h-5 text-cyan-600" />
+                <h3 className="font-bold text-sm text-slate-800">
+                  {isRtl ? 'المزامنة الذكية وتغذية البيانات' : 'Smart JSON Data Synchronization'}
+                </h3>
+              </div>
+              <span className="bg-cyan-50 text-cyan-600 text-[9px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider">
+                MERGE ONLY
+              </span>
+            </div>
+
+            <div className="space-y-4">
+              <div className="bg-cyan-50/50 rounded-2xl p-4 border border-cyan-100 flex items-start gap-3">
+                <ShieldCheck className="w-5 h-5 text-cyan-600 shrink-0 mt-0.5" />
+                <div className="text-xs space-y-1">
+                  <h4 className="font-bold text-slate-800">
+                    {isRtl ? 'مفهوم المزامنة الذكية (إضافة غير الموجود)' : 'What is Smart Synchronization?'}
+                  </h4>
+                  <p className="text-slate-650 leading-relaxed font-medium">
+                    {isRtl 
+                      ? 'مختلفة عن الاستعادة الكاملة! عند رفع ملف النسخة الاحتياطية هنا، لن يتم مسح بياناتك الحالية. سيقوم النظام بتحليل الملف ومقارنته بالبيانات الموجودة، ثم يقوم فقط بإضافة ودمج المنتجات، العملاء، المستودعات، والموردين الجدد غير الموجودين حالياً بالنظام بناءً على المعرفات والباركود.'
+                      : 'Unlike a complete restore, syncing will NOT delete any current data. It analyzes the backup file and safely merges only the new products, categories, suppliers, customers, and transactions that do not already exist in your local database.'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Drag and Drop Zone for Sync */}
+              <div
+                onDragOver={(e) => { e.preventDefault(); setIsSyncDragging(true); }}
+                onDragLeave={() => setIsSyncDragging(false)}
+                onDrop={handleSyncDrop}
+                onClick={() => syncInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-200 ${
+                  isSyncDragging 
+                    ? 'border-cyan-500 bg-cyan-50/40 text-cyan-700' 
+                    : 'border-slate-200 hover:border-cyan-400 hover:bg-slate-50'
+                }`}
+              >
+                <FileJson className="w-10 h-10 text-cyan-500 mb-2 stroke-[1.5]" />
+                <p className="text-xs font-bold text-slate-800">
+                  {isRtl ? 'اسحب وأفلت ملف الـ JSON هنا للمزامنة' : 'Drag & Drop backup JSON here to Sync'}
+                </p>
+                <p className="text-[10px] text-slate-500 font-semibold mt-1">
+                  {isRtl ? 'أو انقر لتصفح واختيار الملف يدوياً من جهازك' : 'or click to browse your files manually'}
+                </p>
+                <input 
+                  type="file"
+                  ref={syncInputRef}
+                  accept=".json"
+                  onChange={handleSyncChange}
+                  className="hidden"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column: Logo & Disaster Recovery */}
+        <div className="space-y-6">
+          {/* Logo Brand Upload Card */}
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-150 space-y-5">
+            <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+              <ImageIcon className="w-5 h-5 text-indigo-600" />
+              <h3 className="font-bold text-sm text-slate-800">
+                {isRtl ? 'شعار المشروع (Logo)' : 'Project Logo & Branding'}
+              </h3>
+            </div>
+
+            <div className="space-y-4">
+              {companyLogo ? (
+                <div className="space-y-3 flex flex-col items-center">
+                  <div className="w-32 h-32 rounded-2xl border border-slate-200 overflow-hidden bg-slate-50 flex items-center justify-center shadow-inner relative group">
+                    <img 
+                      src={companyLogo} 
+                      alt="Company Logo Preview" 
+                      className="w-full h-full object-contain p-2"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={removeLogo}
+                    className="w-full bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold py-1.5 px-3 rounded-xl text-[10px] transition cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    {isRtl ? 'إزالة الشعار الحالي' : 'Delete Current Logo'}
+                  </button>
+                </div>
+              ) : (
+                /* Drag and drop zone for Logo */
+                <div
+                  onDragOver={(e) => { e.preventDefault(); setIsLogoDragging(true); }}
+                  onDragLeave={() => setIsLogoDragging(false)}
+                  onDrop={handleLogoDrop}
+                  onClick={() => logoInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-200 ${
+                    isLogoDragging 
+                      ? 'border-indigo-500 bg-indigo-50/40 text-indigo-700' 
+                      : 'border-slate-200 hover:border-indigo-400 hover:bg-slate-50'
+                  }`}
+                >
+                  <Upload className="w-8 h-8 text-indigo-500 mb-2 stroke-[1.5]" />
+                  <p className="text-[11px] font-bold text-slate-850">
+                    {isRtl ? 'رفع أو إلقاء شعار المنشأة' : 'Upload or Drop logo image'}
+                  </p>
+                  <p className="text-[9px] text-slate-400 font-semibold mt-1">
+                    {isRtl ? 'يدعم صيغ PNG, JPG بحد أقصى 2MB' : 'Supports PNG, JPG up to 2MB'}
+                  </p>
+                  <input 
+                    type="file"
+                    ref={logoInputRef}
+                    accept="image/*"
+                    onChange={handleLogoChange}
+                    className="hidden"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Backup & Disaster Recovery Card */}
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-150 space-y-4">
+            <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+              <AlertTriangle className="w-5 h-5 text-amber-500" />
+              <h3 className="font-bold text-sm text-slate-800">
+                {isRtl ? 'أدوات النسخ والاستعادة الكاملة' : 'Backup & Disaster Recovery'}
+              </h3>
+            </div>
+
+            <div className="space-y-3.5 text-xs font-bold">
+              {/* Export Button */}
+              <button
+                onClick={handleBackupDatabase}
+                className="w-full bg-slate-900 hover:bg-slate-850 text-white font-bold py-2.5 px-4 rounded-xl shadow-xs transition cursor-pointer flex items-center justify-center gap-2"
+              >
+                <Download className="w-4 h-4 text-indigo-400" />
+                {isRtl ? 'تصدير نسخة احتياطية كاملة (.json)' : 'Export Full System Backup'}
+              </button>
+
+              <div className="border-t border-slate-100 my-1"></div>
+
+              {/* Complete Overwrite Area */}
+              <div>
+                <label className="block text-[9px] font-black text-rose-500 uppercase tracking-widest mb-1.5">
+                  ⚠️ {isRtl ? 'استعادة كاملة (استبدال كلي)' : 'Complete Restore (Destructive)'}
+                </label>
+                
+                {/* Drag and Drop Zone for Restore */}
+                <div
+                  onDragOver={(e) => { e.preventDefault(); setIsRestoreDragging(true); }}
+                  onDragLeave={() => setIsRestoreDragging(false)}
+                  onDrop={handleRestoreDrop}
+                  onClick={() => restoreInputRef.current?.click()}
+                  className={`border border-dashed rounded-xl p-3 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-150 ${
+                    isRestoreDragging 
+                      ? 'border-rose-500 bg-rose-50/40 text-rose-700' 
+                      : 'border-slate-200 hover:border-rose-400 hover:bg-slate-50'
+                  }`}
+                >
+                  <Upload className="w-5 h-5 text-slate-450 mb-1" />
+                  <p className="text-[10px] text-slate-700 font-bold">
+                    {isRtl ? 'اضغط أو ألقِ الملف هنا للاستبدال' : 'Click or drop to Overwrite'}
+                  </p>
+                  <input 
+                    type="file"
+                    ref={restoreInputRef}
+                    accept=".json"
+                    onChange={handleRestoreChange}
+                    className="hidden"
+                  />
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100 my-1"></div>
+
+              {/* Reset Database Button */}
+              <button
+                onClick={handleClearAllData}
+                className="w-full bg-rose-50 hover:bg-rose-100 border border-rose-250 text-rose-600 font-bold py-2 px-4 rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <Trash2 className="w-4 h-4 text-rose-500" />
+                {isRtl ? 'تصفير النظام وتفريغ كافة البيانات' : 'Wipe & Clear All Local Data'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

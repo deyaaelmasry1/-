@@ -1,0 +1,380 @@
+import { useState, useRef, useEffect } from 'react';
+import { Product, Category, Supplier, Transaction, ChatMessage } from '../types';
+import { translations, Language } from '../utils/translations';
+import { 
+  BrainCircuit, 
+  Send, 
+  Sparkles, 
+  User, 
+  RefreshCw, 
+  Trash2,
+  AlertCircle,
+  TrendingUp,
+  Boxes,
+  HelpCircle
+} from 'lucide-react';
+
+interface AiAdvisorProps {
+  products: Product[];
+  categories: Category[];
+  suppliers: Supplier[];
+  transactions: Transaction[];
+  language: Language;
+  chatHistory: ChatMessage[];
+  onAddChatMessage: (message: ChatMessage) => void;
+  onClearChatHistory: () => void;
+}
+
+export default function AiAdvisor({
+  products,
+  categories,
+  suppliers,
+  transactions,
+  language,
+  chatHistory,
+  onAddChatMessage,
+  onClearChatHistory
+}: AiAdvisorProps) {
+  const t = translations[language];
+  const isRtl = language === 'ar';
+  const chatBottomRef = useRef<HTMLDivElement>(null);
+
+  // User input state
+  const [userInput, setUserInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+
+  // Scroll to bottom when messages change
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatHistory, isLoading]);
+
+  // Handle Send action
+  const handleSendMessage = async (customText?: string) => {
+    const textToSend = (customText || userInput).trim();
+    if (!textToSend || isLoading) return;
+
+    // Add user message to state
+    const userMsg: ChatMessage = {
+      id: `msg_user_${Date.now()}`,
+      role: 'user',
+      text: textToSend,
+      timestamp: new Date().toISOString()
+    };
+    onAddChatMessage(userMsg);
+    
+    if (!customText) {
+      setUserInput('');
+    }
+    
+    setIsLoading(true);
+    setErrorMessage('');
+
+    try {
+      // Assemble current state to send as grounding context
+      const dbState = {
+        products,
+        categories,
+        suppliers,
+        transactions
+      };
+
+      // Query server-side Express proxy
+      const response = await fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          messages: [...chatHistory, userMsg].map(m => ({ role: m.role, text: m.text })),
+          dbState,
+          currentLanguage: language
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Server error occurred while calling the AI model.');
+      }
+
+      const modelMsg: ChatMessage = {
+        id: `msg_model_${Date.now()}`,
+        role: 'model',
+        text: data.text,
+        timestamp: new Date().toISOString()
+      };
+      onAddChatMessage(modelMsg);
+
+    } catch (err: any) {
+      console.error(err);
+      setErrorMessage(err.message || 'Unable to connect to the smart assistant. Make sure the development server is active.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Helper to parse simple markdown formatting (bold, lists, etc) safely in React 19 without third party dependencies
+  const renderFormattedText = (rawText: string) => {
+    const lines = rawText.split('\n');
+    return lines.map((line, idx) => {
+      let content = line;
+      
+      // Check if line starts with a list item
+      const isListItem = content.trim().startsWith('* ') || content.trim().startsWith('- ');
+      const isNumberedItem = /^\d+\.\s/.test(content.trim());
+      const isHeader = content.trim().startsWith('###') || content.trim().startsWith('##');
+
+      // Replace bold syntax **text** with elements
+      let cleanContent: any[] = [];
+      const parts = content.split('**');
+      
+      parts.forEach((part, index) => {
+        if (index % 2 === 1) {
+          cleanContent.push(<strong key={index} className="font-bold text-slate-950 underline decoration-indigo-200 decoration-2">{part}</strong>);
+        } else {
+          cleanContent.push(part);
+        }
+      });
+
+      // Adjust rendering style based on line attributes
+      if (isHeader) {
+        const text = content.replace(/^#+\s*/, '');
+        return <h4 key={idx} className="text-sm font-bold text-slate-900 mt-3 mb-1.5 font-sans border-b border-slate-100 pb-1">{text}</h4>;
+      }
+      
+      if (isListItem) {
+        return (
+          <li key={idx} className="list-disc list-inside text-slate-700 ml-2 py-0.5 leading-relaxed font-sans">
+            {cleanContent}
+          </li>
+        );
+      }
+
+      if (isNumberedItem) {
+        return (
+          <div key={idx} className="pl-1 py-0.5 leading-relaxed font-sans text-slate-700">
+            {cleanContent}
+          </div>
+        );
+      }
+
+      return (
+        <p key={idx} className="text-slate-700 py-0.5 leading-relaxed font-sans min-h-[1.2rem]">
+          {cleanContent}
+        </p>
+      );
+    });
+  };
+
+  // Pre-configured questions
+  const SUGGESTED_PROMPTS = [
+    {
+      id: 'audit',
+      labelAr: '📊 فحص كامل ومسح ذكي',
+      labelEn: '📊 Complete stock audit',
+      prompt: t.aiAuditPrompt
+    },
+    {
+      id: 'shortage',
+      labelAr: '⚠️ النواقص وقرب النفاد',
+      labelEn: '⚠️ Show low-stock items',
+      prompt: language === 'ar' 
+        ? 'ما هي المنتجات الحالية التي تقع تحت حد التنبيه؟ اذكر كمياتها ومكانها بالمخزن والمورد الذي يجب علي التواصل معه.'
+        : 'List all products below their minimum quantities. Include their current quantity, warehouse shelf location, and corresponding supplier.'
+    },
+    {
+      id: 'value',
+      labelAr: '💰 القيمة والربح والسيولة',
+      labelEn: '💰 Stock assets & valuation',
+      prompt: language === 'ar'
+        ? 'احسب لي إجمالي القيمة المالية لبضاعتي بالتكلفة وسعر البيع، واحسب الأرباح المتوقعة، وأعطني نصائح مالية بناء على هذه البيانات.'
+        : 'Calculate my total stock value (at cost and sales price), estimate total profit margins, and offer financial or ordering advice.'
+    },
+    {
+      id: 'warehouse',
+      labelAr: '💡 نصائح ترتيب المستودع',
+      labelEn: '💡 Warehouse layout tips',
+      prompt: language === 'ar'
+        ? 'بناءً على كميات المنتجات الحالية وأماكن رفوفها، كيف يمكنني تنظيم مستودعي بشكل أفضل لتسريع عمليات الشحن والفرز وتلقي التوريدات؟'
+        : 'Based on my products quantities and shelf locations, how can I optimize my warehouse layout for faster picking and sorting?'
+    }
+  ];
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200/60 shadow-xs h-[650px] flex flex-col overflow-hidden" dir={isRtl ? 'rtl' : 'ltr'}>
+      {/* Panel Header */}
+      <div className="bg-[#1e293b] p-4 flex items-center justify-between text-white">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-slate-800 text-indigo-400 rounded-xl shrink-0">
+            <BrainCircuit className="w-5 h-5 animate-pulse" />
+          </div>
+          <div>
+            <h3 className="font-bold text-slate-100 text-sm flex items-center gap-1.5 font-sans">
+              {t.aiAdvisor}
+              <span className="bg-indigo-600/30 text-indigo-300 px-2 py-0.5 rounded-lg text-[10px] font-bold border border-indigo-500/20">Gemini 3.5</span>
+            </h3>
+            <p className="text-[10px] text-slate-355 mt-0.5 font-sans">
+              {language === 'ar' ? 'مستشارك الشخصي لتحليل المخزون، الحسابات المالية، واللوجستيات' : 'Your personal assistant for stock audit, valuation and logistics'}
+            </p>
+          </div>
+        </div>
+
+        {/* Clear button */}
+        {chatHistory.length > 0 && (
+          <button
+            onClick={onClearChatHistory}
+            className="text-slate-400 hover:text-red-400 p-2 rounded-lg hover:bg-slate-800 transition no-print cursor-pointer"
+            title={language === 'ar' ? 'مسح المحادثة' : 'Clear Chat History'}
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+
+      {/* Main Messages & Suggestions Container */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/40 relative">
+        {chatHistory.length === 0 ? (
+          /* Welcome screen when conversation is blank */
+          <div className="h-full flex flex-col items-center justify-center text-center max-w-lg mx-auto space-y-6 py-6">
+            <div className="w-16 h-16 bg-gradient-to-tr from-indigo-500 to-violet-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
+              <Sparkles className="w-8 h-8 animate-bounce" />
+            </div>
+            
+            <div className="space-y-2">
+              <h4 className="font-black text-slate-800 text-base">{t.aiWelcome}</h4>
+              <p className="text-xs text-slate-400 px-4 leading-relaxed font-bold">
+                {language === 'ar' 
+                  ? 'يمكن لـ Gemini قراءة سجلات المستودع الخاصة بك حالياً بالكامل لحساب الأرباح بدقة، رصد المنتجات الناقصة، وإعطائك نصائح سريعة لترتيب المستودع.' 
+                  : 'Gemini can analyze your live inventory records to calculate margins, warn you about short products, and draft supplier replenishment orders.'}
+              </p>
+            </div>
+
+            {/* Quick Audit Shortcut Box */}
+            <div className="w-full bg-white p-5 rounded-2xl border border-slate-200/60 shadow-3xs space-y-2 text-center">
+              <button
+                id="btn-trigger-full-audit"
+                onClick={() => handleSendMessage(t.aiAuditPrompt)}
+                className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black py-2.5 px-4 rounded-xl text-xs shadow-md shadow-indigo-600/15 transition cursor-pointer"
+              >
+                <Sparkles className="w-4 h-4 text-amber-300" />
+                {t.aiAuditButton}
+              </button>
+              <p className="text-[10px] text-slate-400 font-bold">{language === 'ar' ? 'فحص تلقائي شامل للبضائع والموردين والقيم المالية' : 'Automatic comprehensive analysis of stock, vendors & valuations'}</p>
+            </div>
+
+            {/* Suggested Prompt Chips */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full pt-2">
+              {SUGGESTED_PROMPTS.map(p => (
+                <button
+                  key={p.id}
+                  onClick={() => handleSendMessage(p.prompt)}
+                  className="bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-bold p-3.5 rounded-xl border border-slate-200 hover:border-indigo-300 shadow-3xs text-center transition truncate cursor-pointer"
+                >
+                  {language === 'ar' ? p.labelAr : p.labelEn}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          /* Actual conversation dialogs */
+          <div className="space-y-4">
+            {chatHistory.map(m => {
+              const isUser = m.role === 'user';
+              return (
+                <div 
+                  key={m.id} 
+                  className={`flex gap-3 max-w-[85%] ${isUser ? (isRtl ? 'mr-auto flex-row-reverse' : 'ml-auto') : ''}`}
+                >
+                  {/* Avatar bubble */}
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs shrink-0 font-bold select-none ${
+                    isUser ? 'bg-[#1e293b] text-white' : 'bg-indigo-600 text-white'
+                  }`}>
+                    {isUser ? <User className="w-4 h-4" /> : <BrainCircuit className="w-4 h-4" />}
+                  </div>
+
+                  {/* Text card bubble */}
+                  <div className={`p-4 rounded-2xl shadow-3xs text-xs space-y-1.5 ${
+                    isUser 
+                      ? 'bg-[#1e293b] text-white rounded-tr-none font-bold' 
+                      : 'bg-white text-slate-800 border border-slate-200 rounded-tl-none font-semibold'
+                  }`}>
+                    <div className="whitespace-pre-line leading-relaxed">
+                      {isUser ? m.text : renderFormattedText(m.text)}
+                    </div>
+                    {/* Message timestamp */}
+                    <p className={`text-[9px] font-mono mt-2 select-none text-right ${isUser ? 'text-slate-300' : 'text-slate-400'}`}>
+                      {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Loading / Writing feedback bubble */}
+            {isLoading && (
+              <div className={`flex gap-3 max-w-[80%] ${isRtl ? 'ml-auto' : 'mr-auto'}`}>
+                <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center text-xs shrink-0">
+                  <BrainCircuit className="w-4 h-4 animate-spin" />
+                </div>
+                <div className="bg-white border border-slate-200 p-4 rounded-2xl rounded-tl-none text-xs text-slate-550 space-y-2 shadow-3xs font-semibold">
+                  <p className="font-bold flex items-center gap-1.5">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                    {t.aiWait}
+                  </p>
+                  <p className="text-[10px] text-slate-400 italic">
+                    {language === 'ar' 
+                      ? 'جاري مراجعة كميات المنتجات الحالية، الفئات، وجهات اتصال الموردين...' 
+                      : 'Reviewing active item sheets, category tags, and supply pipelines...'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Error prompt message bubble */}
+            {errorMessage && (
+              <div className="bg-red-50 border border-red-100 rounded-2xl p-4 flex items-start gap-2.5 max-w-lg mx-auto">
+                <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <h5 className="font-bold text-red-800 text-xs">{language === 'ar' ? 'فشل الاتصال بمستشار الذكاء الاصطناعي' : 'AI connection failed'}</h5>
+                  <p className="text-[11px] text-red-600 font-mono leading-relaxed">{errorMessage}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Empty target element for automatic scroll-down */}
+            <div ref={chatBottomRef} />
+          </div>
+        )}
+      </div>
+
+      {/* Footer Text Input Bar */}
+      <div className="p-4 border-t border-slate-100 bg-white">
+        <form 
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSendMessage();
+          }}
+          className="flex gap-2"
+        >
+          <input 
+            type="text" 
+            placeholder={t.aiPromptPlaceholder}
+            value={userInput}
+            onChange={(e) => setUserInput(e.target.value)}
+            disabled={isLoading}
+            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 text-slate-800 font-semibold disabled:opacity-50"
+          />
+          <button
+            id="btn-ai-send"
+            type="submit"
+            disabled={!userInput.trim() || isLoading}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white p-2.5 rounded-xl transition disabled:opacity-50 shrink-0 shadow-md shadow-indigo-600/10 cursor-pointer"
+          >
+            <Send className="w-4 h-4" />
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}

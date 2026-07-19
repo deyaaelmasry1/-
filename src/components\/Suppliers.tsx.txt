@@ -1,0 +1,720 @@
+import React, { useState, useMemo } from 'react';
+import { Supplier, Product, Customer } from '../types';
+import { translations, Language } from '../utils/translations';
+import { printHtml } from '../utils/printHelper';
+import { 
+  Building2, 
+  Phone, 
+  Mail, 
+  MapPin, 
+  Plus, 
+  Trash2, 
+  Search, 
+  UserPlus, 
+  X, 
+  Briefcase,
+  Layers,
+  Edit2,
+  Printer,
+  Share2,
+  Download
+} from 'lucide-react';
+
+interface SuppliersProps {
+  suppliers: Supplier[];
+  products: Product[];
+  language: Language;
+  onAddSupplier: (supplier: Omit<Supplier, 'id'>) => void;
+  onUpdateSupplier: (supplier: Supplier) => void;
+  onDeleteSupplier: (id: string) => void;
+  customers?: Customer[];
+  currencySymbol?: string;
+  onOpenSupplier?: (supplier: Supplier) => void;
+}
+
+export default function Suppliers({
+  suppliers,
+  products,
+  language,
+  onAddSupplier,
+  onUpdateSupplier,
+  onDeleteSupplier,
+  customers = [],
+  currencySymbol = language === 'ar' ? 'ج.م' : '$',
+  onOpenSupplier
+}: SuppliersProps) {
+  const t = translations[language];
+  const isRtl = language === 'ar';
+
+  // Search & Modal State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
+
+  // Import from Customers State
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [customerSearchQuery, setCustomerSearchQuery] = useState('');
+
+  // New Supplier form state
+  const [supName, setSupName] = useState('');
+  const [supCompany, setSupCompany] = useState('');
+  const [supPhone, setSupPhone] = useState('');
+  const [supEmail, setSupEmail] = useState('');
+  const [supAddress, setSupAddress] = useState('');
+  const [supBalance, setSupBalance] = useState('0');
+  const [supBalanceType, setSupBalanceType] = useState<'DEBIT' | 'CREDIT'>('CREDIT');
+
+  // Filter suppliers based on search query
+  const filteredSuppliers = useMemo(() => {
+    return suppliers.filter(s => {
+      const query = searchQuery.toLowerCase();
+      return (
+        s.name.toLowerCase().includes(query) ||
+        (s.company && s.company.toLowerCase().includes(query)) ||
+        (s.phone && s.phone.includes(query)) ||
+        (s.email && s.email.toLowerCase().includes(query))
+      );
+    });
+  }, [suppliers, searchQuery]);
+
+  // Precompute products grouped by supplier for high CPU & RAM performance
+  const productsBySupplier = useMemo(() => {
+    const map: Record<string, typeof products> = {};
+    products.forEach(p => {
+      if (p.supplierId) {
+        if (!map[p.supplierId]) {
+          map[p.supplierId] = [];
+        }
+        map[p.supplierId].push(p);
+      }
+    });
+    return map;
+  }, [products]);
+
+  // Filter customers for import
+  const filteredCustomersForImport = useMemo(() => {
+    return customers.filter(c => {
+      const q = customerSearchQuery.toLowerCase();
+      return c.name.toLowerCase().includes(q) || (c.phone && c.phone.includes(q)) || (c.email && c.email.toLowerCase().includes(q));
+    });
+  }, [customers, customerSearchQuery]);
+
+  // Form submission
+  const handleSubmitSupplier = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!supName.trim()) {
+      alert('Supplier name is required!');
+      return;
+    }
+
+    const numericBalance = parseFloat(supBalance) || 0;
+    const finalBalance = (supBalanceType === 'CREDIT' ? -1 : 1) * numericBalance;
+
+    if (editingSupplier) {
+      onUpdateSupplier({
+        ...editingSupplier,
+        name: supName.trim(),
+        company: supCompany.trim() || undefined,
+        phone: supPhone.trim() || undefined,
+        email: supEmail.trim() || undefined,
+        address: supAddress.trim() || undefined,
+        balance: finalBalance
+      });
+    } else {
+      onAddSupplier({
+        name: supName.trim(),
+        company: supCompany.trim() || undefined,
+        phone: supPhone.trim() || undefined,
+        email: supEmail.trim() || undefined,
+        address: supAddress.trim() || undefined,
+        balance: finalBalance
+      });
+    }
+
+    // Reset Form
+    setSupName('');
+    setSupCompany('');
+    setSupPhone('');
+    setSupEmail('');
+    setSupAddress('');
+    setSupBalance('0');
+    setSupBalanceType('CREDIT');
+    setEditingSupplier(null);
+    setIsModalOpen(false);
+  };
+
+  return (
+    <div className="space-y-6" dir={isRtl ? 'rtl' : 'ltr'}>
+      {/* Guided Onboarding Banner if empty */}
+      {suppliers.length === 0 && (
+        <div className="bg-gradient-to-r from-purple-500 via-indigo-500 to-purple-600 rounded-3xl p-6 text-white shadow-md flex flex-col sm:flex-row items-center justify-between gap-5 animate-in fade-in zoom-in-95 duration-200">
+          <div className="space-y-1.5 text-center sm:text-start">
+            <h4 className="font-black text-base flex items-center justify-center sm:justify-start gap-2">
+              <Plus className="w-5 h-5 text-indigo-200 animate-pulse" />
+              {isRtl ? 'بوابة الموردين والشركاء! 🤝' : 'Suppliers & Partners Portal! 🤝'}
+            </h4>
+            <p className="text-xs text-white/95 font-semibold leading-relaxed max-w-2xl">
+              {isRtl 
+                ? 'لا يوجد أي موردين مسجلين في دفترك حالياً. اضغط على الزر المتوهج لإضافة شركة التوريد الأولى التي تشتري منها بضاعة المحل ليسهل تعقب الفواتير والديون بلمح البصر.' 
+                : 'No suppliers registered yet. Tap the button to create your first vendor profiles and configure purchasing channels.'}
+            </p>
+          </div>
+          <button
+            onClick={() => setIsModalOpen(true)}
+            className="bg-white text-indigo-600 hover:bg-indigo-50 font-black text-xs px-6 py-3.5 rounded-2xl transition shadow-lg shrink-0 cursor-pointer animate-bounce border-none outline-none"
+          >
+            {isRtl ? '✨ أضف أول مورد لمتجرك!' : '✨ Add First Supplier!'}
+          </button>
+        </div>
+      )}
+
+      {/* Header bar */}
+      <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-black text-slate-800 font-sans tracking-tight">
+            {t.suppliers}
+          </h2>
+          <p className="text-xs text-slate-400 mt-1 font-semibold">
+            {t.supplierDetails}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <button
+            id="btn-add-supplier"
+            onClick={() => setIsModalOpen(true)}
+            className="flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-md shadow-indigo-600/10 transition cursor-pointer border-none outline-none"
+          >
+            <UserPlus className="w-4 h-4" />
+            {t.addSupplier}
+          </button>
+
+          <button
+            onClick={() => setIsImportModalOpen(true)}
+            className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-md shadow-emerald-600/10 transition cursor-pointer border-none outline-none"
+          >
+            <Download className="w-4 h-4" />
+            {language === 'ar' ? 'جلب من العملاء 📥' : 'Import from Customers 📥'}
+          </button>
+        </div>
+      </div>
+
+      {/* Search Input Filter */}
+      <div className="bg-white p-4 rounded-2xl border border-slate-200/60 shadow-xs">
+        <div className="relative">
+          <Search className={`absolute top-2.5 w-4 h-4 text-slate-400 ${isRtl ? 'right-3' : 'left-3'}`} />
+          <input 
+            type="text" 
+            placeholder={language === 'ar' ? 'البحث عن مورد، هاتف، أو اسم الشركة...' : 'Search by name, company, email...'}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className={`w-full bg-slate-50 border border-slate-200/60 rounded-xl py-2 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 ${isRtl ? 'pr-9 pl-3' : 'pl-9 pr-3'}`}
+          />
+        </div>
+      </div>
+
+      {/* Directory Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {filteredSuppliers.length === 0 ? (
+          <div className="bg-white p-8 rounded-2xl border border-slate-200/60 shadow-xs text-center text-slate-400 col-span-full">
+            {t.noData}
+          </div>
+        ) : (
+          filteredSuppliers.map(s => {
+            // Count products supplied by this supplier
+            const suppliedProducts = productsBySupplier[s.id] || [];
+
+            return (
+              <div 
+                key={s.id} 
+onClick={() => onOpenSupplier ? onOpenSupplier(s) : undefined}
+                className="bg-white rounded-2xl border border-slate-200/65 shadow-xs hover:shadow-md hover:border-indigo-250 cursor-pointer transition-all flex flex-col overflow-hidden group"
+              >
+                {/* Header Block */}
+                <div className="bg-[#1e293b] p-4 flex items-start justify-between text-white">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-slate-800 text-indigo-400 rounded-xl group-hover:bg-indigo-600 group-hover:text-white transition">
+                      <Building2 className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-slate-100 text-sm leading-tight">{s.name}</h4>
+                      {s.company && (
+                        <p className="text-xs text-slate-300 mt-1 flex items-center gap-1 font-semibold">
+                          <Briefcase className="w-3.5 h-3.5 text-indigo-300" />
+                          {s.company}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+                    {/* Edit button */}
+                    <button
+                      onClick={() => {
+                        setEditingSupplier(s);
+                        setSupName(s.name);
+                        setSupCompany(s.company || '');
+                        setSupPhone(s.phone || '');
+                        setSupEmail(s.email || '');
+                        setSupAddress(s.address || '');
+                        setSupBalance(Math.abs(s.balance || 0).toString());
+                        setSupBalanceType((s.balance || 0) < 0 ? 'CREDIT' : 'DEBIT');
+                        setIsModalOpen(true);
+                      }}
+                      className="text-slate-400 hover:text-indigo-400 p-1.5 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                      title={language === 'ar' ? 'تعديل المورد' : 'Edit Supplier'}
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+
+                    {/* Delete button */}
+                    <button
+                      onClick={() => {
+                        if (window.confirm(language === 'ar' ? 'هل تريد حذف هذا المورد؟' : 'Are you sure you want to delete this supplier?')) {
+                          onDeleteSupplier(s.id);
+                        }
+                      }}
+                      className="text-slate-400 hover:text-red-400 p-1.5 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                      title={language === 'ar' ? 'حذف المورد' : 'Delete Supplier'}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Details list */}
+                <div className="p-5 space-y-3.5 flex-1 text-xs">
+                  {/* Phone */}
+                  {s.phone && (
+                    <div className="flex items-center gap-2.5 text-slate-655 font-mono font-bold" onClick={(e) => e.stopPropagation()}>
+                      <Phone className="w-4 h-4 text-indigo-500 shrink-0" />
+                      <a href={`tel:${s.phone}`} className="hover:text-indigo-600 hover:underline">{s.phone}</a>
+                    </div>
+                  )}
+
+                  {/* Email */}
+                  {s.email && (
+                    <div className="flex items-center gap-2.5 text-slate-655 font-mono font-bold truncate" onClick={(e) => e.stopPropagation()}>
+                      <Mail className="w-4 h-4 text-indigo-500 shrink-0" />
+                      <a href={`mailto:${s.email}`} className="hover:text-indigo-600 hover:underline truncate" title={s.email}>{s.email}</a>
+                    </div>
+                  )}
+
+                  {/* Physical Address */}
+                  {s.address && (
+                    <div className="flex items-start gap-2.5 text-slate-600 leading-relaxed font-medium">
+                      <MapPin className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
+                      <span>{s.address}</span>
+                    </div>
+                  )}
+
+                  {/* Supplied products list summary */}
+                  <div className="pt-3.5 border-t border-slate-100 mt-4">
+                    <p className="text-[10px] text-slate-400 font-bold uppercase flex items-center gap-1 mb-2">
+                      <Layers className="w-3.5 h-3.5 text-slate-455" />
+                      {language === 'ar' ? 'المنتجات المسندة' : 'Assigned Products'} ({suppliedProducts.length})
+                    </p>
+                    {suppliedProducts.length === 0 ? (
+                      <p className="text-[11px] text-slate-300 italic">{language === 'ar' ? 'لم يتم ربط أي منتج بالمورد حالياً' : 'No assigned products linked yet'}</p>
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {suppliedProducts.slice(0, 3).map(p => (
+                          <span key={p.id} className="inline-block bg-slate-50 border border-slate-200 text-[10px] text-slate-550 font-bold px-2 py-0.5 rounded-lg">
+                            {p.name}
+                          </span>
+                        ))}
+                        {suppliedProducts.length > 3 && (
+                          <span className="text-[10px] text-slate-400 font-bold self-center px-1">+{suppliedProducts.length - 3} more</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Supplier Balance Display */}
+                  <div className="pt-3 border-t border-slate-100 mt-2 flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">
+                      {language === 'ar' ? 'الرصيد المالي للمورد' : 'Supplier Balance'}
+                    </span>
+                    {(s.balance || 0) < 0 ? (
+                      <span className="px-2 py-0.5 rounded text-xs font-mono font-bold bg-emerald-100 text-emerald-800">
+                        {language === 'ar' ? 'دائن (له علينا):' : 'Credit:'} {currencySymbol}{Math.abs(s.balance || 0).toFixed(2)}
+                      </span>
+                    ) : (s.balance || 0) > 0 ? (
+                      <span className="px-2 py-0.5 rounded text-xs font-mono font-bold bg-amber-100 text-amber-800">
+                        {language === 'ar' ? 'مدين (دفع مقدماً):' : 'Debit:'} {currencySymbol}{(s.balance || 0).toFixed(2)}
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded text-xs font-mono font-bold bg-slate-100 text-slate-500">
+                        {currencySymbol}0.00
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* --- ADD SUPPLIER FORM MODAL --- */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden border border-slate-200" dir={isRtl ? 'rtl' : 'ltr'}>
+            <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-slate-50">
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-slate-800 text-sm">
+                  {editingSupplier
+                    ? (language === 'ar' ? 'تعديل بيانات المورد 📝' : 'Edit Supplier Details 📝')
+                    : t.addSupplier}
+                </h3>
+                {editingSupplier && (
+                  <div className="flex gap-1.5 items-center ml-2 mr-2">
+                    {/* Print Profile */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const html = `
+                          <html>
+                            <head>
+                              <title>Supplier Details - ${supName}</title>
+                              <style>
+                                @page {
+                                  size: A4 portrait;
+                                  margin: 10mm;
+                                }
+                                body { 
+                                  font-family: sans-serif; 
+                                  padding: 20px; 
+                                  color: #1e293b; 
+                                  direction: ${isRtl ? 'rtl' : 'ltr'}; 
+                                  background: #fff;
+                                }
+                                .profile-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 25px; background: #f8fafc; }
+                                h2 { margin-top: 0; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; }
+                                p { margin: 10px 0; font-size: 14px; }
+                                
+                                @media print {
+                                  html, body {
+                                    margin: 0 !important;
+                                    padding: 0 !important;
+                                    height: auto !important;
+                                    background: #fff !important;
+                                  }
+                                  body {
+                                    padding: 10mm !important;
+                                  }
+                                }
+                              </style>
+                            </head>
+                            <body>
+                              <div class="profile-card">
+                                <h2>${language === 'ar' ? 'ملف تعريف المورد' : 'Supplier Profile'}</h2>
+                                <p><strong>${language === 'ar' ? 'الاسم:' : 'Name:'}</strong> ${supName}</p>
+                                <p><strong>${language === 'ar' ? 'الشركة:' : 'Company:'}</strong> ${supCompany || '-'}</p>
+                                <p><strong>${language === 'ar' ? 'الهاتف:' : 'Phone:'}</strong> ${supPhone || '-'}</p>
+                                <p><strong>${language === 'ar' ? 'البريد الإلكتروني:' : 'Email:'}</strong> ${supEmail || '-'}</p>
+                                <p><strong>${language === 'ar' ? 'العنوان:' : 'Address:'}</strong> ${supAddress || '-'}</p>
+                              </div>
+                            </body>
+                          </html>
+                        `;
+                        printHtml(html, 'a4', language === 'ar' ? 'ملف تعريف المورد' : 'Supplier Profile');
+                      }}
+                      className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-slate-200/50 rounded transition cursor-pointer"
+                      title={language === 'ar' ? 'طباعة ملف المورد' : 'Print Supplier Profile'}
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                    </button>
+
+                    {/* Share Profile */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const shareText = `📋 [Supplier Profile] ${supName}\nCompany: ${supCompany || '-'}\nPhone: ${supPhone || '-'}\nEmail: ${supEmail || '-'}\nAddress: ${supAddress || '-'}`;
+                        navigator.clipboard.writeText(shareText);
+                        alert(language === 'ar' ? 'تم نسخ بيانات المورد للحافظة!' : 'Supplier info copied to clipboard!');
+                      }}
+                      className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-slate-200/50 rounded transition cursor-pointer"
+                      title={language === 'ar' ? 'مشاركة بيانات المورد' : 'Share Supplier Info'}
+                    >
+                      <Share2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+              <button 
+                onClick={() => {
+                  setEditingSupplier(null);
+                  setSupName('');
+                  setSupCompany('');
+                  setSupPhone('');
+                  setSupEmail('');
+                  setSupAddress('');
+                  setIsModalOpen(false);
+                }} 
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitSupplier} className="p-5 space-y-4">
+              {/* Supplier/Name */}
+              <div>
+                <label className="block text-xs font-bold text-slate-655 mb-1">{t.supplierName} *</label>
+                <input 
+                  type="text" 
+                  required
+                  placeholder="e.g. Al-Badi Group"
+                  value={supName}
+                  onChange={(e) => setSupName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold text-slate-800"
+                />
+              </div>
+
+              {/* Company */}
+              <div>
+                <label className="block text-xs font-bold text-slate-655 mb-1">{t.companyName}</label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. Trading & Shipping Ltd"
+                  value={supCompany}
+                  onChange={(e) => setSupCompany(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold text-slate-800"
+                />
+              </div>
+
+              {/* Phone & Email */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-655 mb-1">{t.phone}</label>
+                  <input 
+                    type="tel" 
+                    placeholder="e.g. +966 50 000 0000"
+                    value={supPhone}
+                    onChange={(e) => setSupPhone(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono font-bold text-slate-800"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-655 mb-1">{t.email}</label>
+                  <input 
+                    type="email" 
+                    placeholder="e.g. info@company.com"
+                    value={supEmail}
+                    onChange={(e) => setSupEmail(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono font-bold text-slate-800"
+                  />
+                </div>
+              </div>
+
+              {/* Physical Address */}
+              <div>
+                <label className="block text-xs font-bold text-slate-655 mb-1">{t.address}</label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. Industrial Zone, Riyadh"
+                  value={supAddress}
+                  onChange={(e) => setSupAddress(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold text-slate-800"
+                />
+              </div>
+
+              {/* Initial Debt with Type (Debit/Credit) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-655 mb-1">
+                    {editingSupplier
+                      ? (language === 'ar' ? `الرصيد المالي الحالي (${currencySymbol})` : `Current Financial Balance (${currencySymbol})`)
+                      : (language === 'ar' ? `الرصيد الافتتاحي (${currencySymbol})` : `Opening Balance (${currencySymbol})`)}
+                  </label>
+                  <div className="relative">
+                    <span className={`absolute top-2 text-slate-400 font-bold ${isRtl ? 'left-3' : 'right-3'}`}>{currencySymbol}</span>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      step="0.01"
+                      value={supBalance}
+                      onChange={(e) => setSupBalance(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-bold text-slate-800"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-655 mb-1">
+                    {language === 'ar' ? 'طبيعة رصيد المورد' : 'Balance Type'}
+                  </label>
+                  <select
+                    value={supBalanceType}
+                    onChange={(e) => setSupBalanceType(e.target.value as 'DEBIT' | 'CREDIT')}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-bold text-slate-700"
+                  >
+                    <option value="CREDIT">
+                      {language === 'ar' ? 'دائن (له رصيد علينا / نطالب بالسداد له)' : 'Credit (We owe them)'}
+                    </option>
+                    <option value="DEBIT">
+                      {language === 'ar' ? 'مدين (دفعنا له مقدماً / يطالبنا بمنتجات)' : 'Debit (They owe us)'}
+                    </option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Buttons */}
+              <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-4 py-2.5 rounded-xl transition cursor-pointer"
+                >
+                  {t.cancel}
+                </button>
+                <button
+                  type="submit"
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow-md shadow-indigo-600/10 transition cursor-pointer"
+                >
+                  {t.save}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Import from Customers Modal */}
+      {isImportModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl border border-slate-100 flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="bg-slate-50 border-b border-slate-100 p-5 flex items-center justify-between">
+              <div>
+                <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2">
+                  <Download className="w-5 h-5 text-emerald-600 animate-pulse" />
+                  {language === 'ar' ? 'جلب واستيراد من سجل العملاء' : 'Import from Customers Directory'}
+                </h3>
+                <p className="text-[10px] text-slate-450 mt-1 font-semibold">
+                  {language === 'ar' 
+                    ? 'اختر أي عميل حالي لتحويله وتكرار بياناته كمورد في متجرك بضغطة زر واحدة.' 
+                    : 'Select any registered customer to import and clone their profile as a supplier.'}
+                </p>
+              </div>
+              <button 
+                onClick={() => {
+                  setIsImportModalOpen(false);
+                  setCustomerSearchQuery('');
+                }} 
+                className="text-slate-400 hover:text-slate-600 cursor-pointer border-none bg-transparent outline-none"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Search Input */}
+            <div className="p-4 border-b border-slate-50 bg-slate-50/50">
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-450 absolute left-3 top-3.5" />
+                <input
+                  type="text"
+                  placeholder={language === 'ar' ? 'بحث باسم العميل أو الهاتف...' : 'Search customer name or phone...'}
+                  value={customerSearchQuery}
+                  onChange={(e) => setCustomerSearchQuery(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-xl py-2.5 pl-9 pr-4 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 text-slate-800"
+                />
+              </div>
+            </div>
+
+            {/* Customers List */}
+            <div className="p-4 overflow-y-auto flex-1 space-y-2 max-h-[45vh]">
+              {customers.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-slate-400 text-xs font-bold">
+                    {language === 'ar' ? 'لا يوجد أي عملاء مسجلين في النظام حالياً!' : 'No customers registered in the system yet!'}
+                  </p>
+                </div>
+              ) : filteredCustomersForImport.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-slate-400 text-xs font-bold">
+                    {language === 'ar' ? 'لا توجد نتائج تطابق البحث!' : 'No customers match your search!'}
+                  </p>
+                </div>
+              ) : (
+                filteredCustomersForImport.map(cust => {
+                  const alreadyExists = suppliers.some(s => s.name.trim().toLowerCase() === cust.name.trim().toLowerCase());
+                  return (
+                    <div 
+                      key={cust.id} 
+                      className={`flex items-center justify-between p-3.5 rounded-2xl border transition ${
+                        alreadyExists 
+                          ? 'bg-slate-50/70 border-slate-100 opacity-60' 
+                          : 'bg-white border-slate-150 hover:border-emerald-300 hover:shadow-xs'
+                      }`}
+                    >
+                      <div className="space-y-1 min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <p className="font-extrabold text-slate-850 text-xs truncate">
+                            {cust.name}
+                          </p>
+                          {alreadyExists && (
+                            <span className="bg-amber-50 text-amber-700 text-[8px] px-1.5 py-0.5 rounded font-black uppercase">
+                              {language === 'ar' ? 'موجود كمورد' : 'Already Supplier'}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 text-[10px] text-slate-450 font-semibold">
+                          {cust.phone && <span className="flex items-center gap-1">📞 {cust.phone}</span>}
+                          {cust.address && <span className="flex items-center gap-1">📍 {cust.address}</span>}
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (alreadyExists) {
+                            if (!window.confirm(language === 'ar' ? 'هذا الاسم مسجل بالفعل كمورد. هل تريد إضافته مرة أخرى على أي حال؟' : 'This name is already in suppliers list. Add anyway?')) {
+                              return;
+                            }
+                          }
+                          onAddSupplier({
+                            name: cust.name,
+                            phone: cust.phone,
+                            email: cust.email,
+                            address: cust.address,
+                            balance: 0
+                          });
+                          setIsImportModalOpen(false);
+                          setCustomerSearchQuery('');
+                        }}
+                        className={`px-3 py-1.5 rounded-xl font-bold text-[10px] cursor-pointer transition border-none outline-none ${
+                          alreadyExists
+                            ? 'bg-amber-100 hover:bg-amber-200 text-amber-800'
+                            : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                        }`}
+                      >
+                        {language === 'ar' ? 'جلب واستيراد' : 'Import Supplier'}
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="bg-slate-50 p-4 border-t border-slate-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsImportModalOpen(false);
+                  setCustomerSearchQuery('');
+                }}
+                className="bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold px-4 py-2.5 rounded-xl transition cursor-pointer border-none outline-none"
+              >
+                {language === 'ar' ? 'إغلاق النافذة' : 'Close'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

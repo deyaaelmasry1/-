@@ -1,0 +1,426 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Product } from '../types';
+import { translations, Language } from '../utils/translations';
+import { 
+  Camera, 
+  X, 
+  Barcode, 
+  Sparkles, 
+  AlertCircle, 
+  Search, 
+  ArrowUpRight, 
+  ArrowDownLeft, 
+  CheckCircle2, 
+  RefreshCw 
+} from 'lucide-react';
+
+interface BarcodeScannerProps {
+  products: Product[];
+  language: Language;
+  isOpen: boolean;
+  onClose: () => void;
+  onScanSuccess: (product: Product, quickAction?: 'IN' | 'OUT') => void;
+}
+
+export default function BarcodeScanner({
+  products,
+  language,
+  isOpen,
+  onClose,
+  onScanSuccess
+}: BarcodeScannerProps) {
+  const t = translations[language];
+  const isRtl = language === 'ar';
+
+  const [hasCamera, setHasCamera] = useState(false);
+  const [cameraActive, setCameraActive] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [scannedProduct, setScannedProduct] = useState<Product | null>(null);
+  const [selectedQuickAction, setSelectedQuickAction] = useState<'IN' | 'OUT' | null>(null);
+  const [quickQty, setQuickQty] = useState(1);
+  const [quickPrice, setQuickPrice] = useState(0);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  // Check camera support and request permissions
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const checkAndStartCamera = async () => {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('Your browser does not support camera API inside this container.');
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }
+        });
+
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+        setHasCamera(true);
+        setCameraActive(true);
+        setCameraError(null);
+      } catch (err: any) {
+        console.warn('Camera initiation failed:', err);
+        setHasCamera(false);
+        setCameraError(err.message || 'Camera access blocked or unavailable in this environment.');
+      }
+    };
+
+    checkAndStartCamera();
+
+    return () => {
+      stopCamera();
+    };
+  }, [isOpen]);
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    setCameraActive(false);
+  };
+
+  if (!isOpen) return null;
+
+  // Search filtered products for simulation selection
+  const filteredProducts = products.filter(p => {
+    const q = searchQuery.toLowerCase();
+    return p.name.toLowerCase().includes(q) || p.code.toLowerCase().includes(q);
+  });
+
+  const handleSimulateScan = (product: Product) => {
+    setScannedProduct(product);
+    setQuickPrice(product.sellingPrice);
+    // Beep sound effect simulator
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(1200, audioCtx.currentTime); // Beep frequency
+      gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.08); // Short beep
+    } catch (e) {
+      console.log('Audio feedback not supported or blocked by browser user gesture.');
+    }
+  };
+
+  const handleApplyQuickTransaction = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!scannedProduct || !selectedQuickAction) return;
+
+    onScanSuccess(scannedProduct, selectedQuickAction);
+    setSuccessMessage(
+      language === 'ar'
+        ? `تم تسجيل الحركة بنجاح للمنتج: ${scannedProduct.name}`
+        : `Transaction successfully logged for: ${scannedProduct.name}`
+    );
+
+    // Reset state after success
+    setTimeout(() => {
+      setSuccessMessage(null);
+      setScannedProduct(null);
+      setSelectedQuickAction(null);
+      onClose();
+    }, 2000);
+  };
+
+  const handleSelectOnly = () => {
+    if (!scannedProduct) return;
+    onScanSuccess(scannedProduct);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-950/80 flex items-center justify-center p-4 z-50 backdrop-blur-xs animate-in fade-in duration-200">
+      <div 
+        className="bg-[#1e293b] text-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-700/50 flex flex-col max-h-[90vh]"
+        dir={isRtl ? 'rtl' : 'ltr'}
+      >
+        {/* Header bar */}
+        <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-indigo-500/10 text-indigo-400 rounded-xl border border-indigo-500/20">
+              <Camera className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <h3 className="font-bold text-sm tracking-tight text-slate-100">
+                {language === 'ar' ? 'قارئ الباركود الذكي بكاميرا الجوال' : 'Mobile Barcode & QR Camera Scanner'}
+              </h3>
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                {language === 'ar' ? 'قم بتوجيه الكاميرا للملصق أو استخدم محاكي القراءة بالأسفل' : 'Scan a real sticker or simulate scanning with the toolbox below'}
+              </p>
+            </div>
+          </div>
+          <button 
+            onClick={onClose}
+            className="text-slate-400 hover:text-white p-2 rounded-xl hover:bg-slate-800 transition cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Content Wrapper */}
+        <div className="overflow-y-auto flex-1 p-5 space-y-5">
+          {successMessage ? (
+            /* Success splash screen */
+            <div className="py-12 flex flex-col items-center justify-center text-center space-y-4 animate-in zoom-in duration-300">
+              <div className="w-16 h-16 bg-emerald-500/10 text-emerald-400 rounded-full flex items-center justify-center border border-emerald-500/20 shadow-lg shadow-emerald-500/10">
+                <CheckCircle2 className="w-10 h-10 animate-bounce" />
+              </div>
+              <div>
+                <h4 className="text-emerald-400 font-bold text-base">{language === 'ar' ? 'تمت العملية بنجاح!' : 'Operation Successful!'}</h4>
+                <p className="text-xs text-slate-300 mt-1.5 px-6 leading-relaxed">{successMessage}</p>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Camera view container */}
+              <div className="relative aspect-video w-full rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 flex items-center justify-center">
+                {cameraActive && !cameraError ? (
+                  <>
+                    <video 
+                      ref={videoRef}
+                      autoPlay 
+                      playsInline 
+                      muted 
+                      className="w-full h-full object-cover"
+                    />
+                    {/* Viewfinder overlay laser line */}
+                    <div className="absolute inset-0 flex items-center justify-center p-8">
+                      <div className="w-full h-44 border-2 border-indigo-400/60 rounded-xl relative flex items-center justify-center bg-transparent shadow-[0_0_0_9999px_rgba(15,23,42,0.6)]">
+                        {/* Laser line animation */}
+                        <div className="absolute left-0 right-0 h-0.5 bg-red-500 shadow-[0_0_10px_2px_rgba(239,68,68,0.8)] animate-pulse w-full"></div>
+                        
+                        {/* Crop corners indicator */}
+                        <div className="absolute top-2 left-2 w-4 h-4 border-t-2 border-l-2 border-indigo-400"></div>
+                        <div className="absolute top-2 right-2 w-4 h-4 border-t-2 border-r-2 border-indigo-400"></div>
+                        <div className="absolute bottom-2 left-2 w-4 h-4 border-b-2 border-l-2 border-indigo-400"></div>
+                        <div className="absolute bottom-2 right-2 w-4 h-4 border-b-2 border-r-2 border-indigo-400"></div>
+
+                        <div className="absolute -bottom-8 text-[9px] font-bold text-indigo-300 tracking-wider uppercase bg-slate-900/90 py-1 px-2.5 rounded-full border border-slate-700/50">
+                          {language === 'ar' ? 'تحديد بؤرة المسح' : 'ALIGN BARCODE'}
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  /* Camera blocked / loading banner */
+                  <div className="p-6 flex flex-col items-center justify-center text-center space-y-3">
+                    <div className="p-3 bg-amber-500/10 text-amber-400 rounded-2xl border border-amber-500/20">
+                      <AlertCircle className="w-8 h-8" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-slate-200">
+                        {language === 'ar' 
+                          ? 'الكاميرا مغلقة أو محجوبة بالمتصفح' 
+                          : 'Camera Offline / Stream Restrained'}
+                      </p>
+                      <p className="text-[10px] text-slate-400 mt-1 max-w-xs leading-relaxed">
+                        {language === 'ar' 
+                          ? 'يتم منع الكاميرا أحياناً داخل الإطارات الفرعية للمعاينة. لا تقلق، يمكنك محاكاة القراءة من الصندوق بالأسفل بكل سهولة!'
+                          : 'Iframe containers often restrict camera APIs. Use the high-fidelity interactive simulation toolbox below to test!'}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Scanned/Selected Product Action Panel */}
+              {scannedProduct ? (
+                <div className="bg-slate-900 rounded-2xl border border-indigo-500/25 p-4.5 space-y-4 animate-in slide-in-from-bottom duration-300">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <Barcode className="w-5 h-5 text-indigo-400" />
+                      <div>
+                        <h4 className="text-xs text-slate-400 font-bold uppercase tracking-wider">{language === 'ar' ? 'المنتج المقروء' : 'Scanned Product'}</h4>
+                        <p className="font-bold text-slate-100 text-sm mt-0.5">{scannedProduct.name}</p>
+                      </div>
+                    </div>
+                    <span className="bg-indigo-600/30 text-indigo-300 px-2 py-0.5 rounded-lg border border-indigo-500/20 font-mono font-bold text-[10px] uppercase">
+                      {scannedProduct.code}
+                    </span>
+                  </div>
+
+                  {/* Stock Levels Indicator */}
+                  <div className="grid grid-cols-2 gap-3 text-xs bg-slate-950/40 p-2.5 rounded-xl border border-slate-800">
+                    <div>
+                      <span className="text-[10px] text-slate-500 font-bold block uppercase">{language === 'ar' ? 'الكمية الحالية' : 'Current Stock'}</span>
+                      <span className="font-black font-mono text-slate-200 text-sm">{scannedProduct.quantity} pcs</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-500 font-bold block uppercase">{language === 'ar' ? 'سعر التجزئة' : 'Retail Price'}</span>
+                      <span className="font-black font-mono text-indigo-400 text-sm">${scannedProduct.sellingPrice.toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  {/* Quick Action Selection */}
+                  <div className="space-y-3">
+                    <label className="block text-[11px] font-bold text-slate-350">{language === 'ar' ? 'اختر الإجراء السريع للمخزن:' : 'Choose Quick Stock Action:'}</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedQuickAction('IN')}
+                        className={`py-2 px-3 rounded-xl text-xs font-bold border transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                          selectedQuickAction === 'IN'
+                            ? 'bg-emerald-600 border-emerald-500 text-white'
+                            : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-750'
+                        }`}
+                      >
+                        <ArrowUpRight className="w-4 h-4" />
+                        {language === 'ar' ? 'تسجيل وارد' : 'Stock In'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setSelectedQuickAction('OUT')}
+                        className={`py-2 px-3 rounded-xl text-xs font-bold border transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                          selectedQuickAction === 'OUT'
+                            ? 'bg-amber-600 border-amber-500 text-white'
+                            : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-750'
+                        }`}
+                      >
+                        <ArrowDownLeft className="w-4 h-4" />
+                        {language === 'ar' ? 'تسجيل صادر' : 'Stock Out'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleSelectOnly}
+                        className="py-2 px-3 rounded-xl text-xs font-bold border bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-750 flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Search className="w-4 h-4 text-indigo-400" />
+                        {language === 'ar' ? 'عرض فقط' : 'View Only'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Quick Transaction inputs */}
+                  {selectedQuickAction && (
+                    <form onSubmit={handleApplyQuickTransaction} className="space-y-3 bg-slate-950/60 p-4 rounded-xl border border-slate-800/80 animate-in fade-in duration-200">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">{language === 'ar' ? 'الكمية' : 'Quantity'}</label>
+                          <input 
+                            type="number"
+                            min="1"
+                            required
+                            value={quickQty}
+                            onChange={(e) => setQuickQty(Math.max(1, Number(e.target.value)))}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-lg py-1.5 px-2.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-bold"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">{language === 'ar' ? 'سعر الوحدة ($)' : 'Unit Price ($)'}</label>
+                          <input 
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            required
+                            value={quickPrice}
+                            onChange={(e) => setQuickPrice(Number(e.target.value))}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-lg py-1.5 px-2.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-bold"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end gap-2 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setScannedProduct(null);
+                            setSelectedQuickAction(null);
+                          }}
+                          className="bg-slate-800 hover:bg-slate-750 text-slate-300 text-[11px] font-bold py-1.5 px-3 rounded-lg border border-slate-700 cursor-pointer"
+                        >
+                          {language === 'ar' ? 'إعادة قراءة' : 'Rescan'}
+                        </button>
+                        <button
+                          type="submit"
+                          className="bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold py-1.5 px-4.5 rounded-lg shadow-md cursor-pointer"
+                        >
+                          {language === 'ar' ? 'حفظ الحركة وسجلها' : 'Confirm Movement'}
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </div>
+              ) : (
+                /* Simulation search toolbox */
+                <div className="space-y-3 bg-slate-900 p-4.5 rounded-2xl border border-slate-800">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Sparkles className="w-4 h-4 text-amber-400" />
+                    <h4 className="text-xs font-bold text-slate-300">{language === 'ar' ? 'صندوق محاكاة قراءة الباركود السريع' : 'High-Fidelity Scan Simulation Drawer'}</h4>
+                  </div>
+                  <div className="relative">
+                    <Search className={`absolute top-2.5 w-4 h-4 text-slate-500 ${isRtl ? 'right-3' : 'left-3'}`} />
+                    <input 
+                      type="text"
+                      placeholder={language === 'ar' ? 'ابحث عن منتج بالمخزن لمحاكاة مسحه...' : 'Search product to simulate camera scanning...'}
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className={`w-full bg-slate-950 border border-slate-850 rounded-xl py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 ${isRtl ? 'pr-9 pl-3' : 'pl-9 pr-3'}`}
+                    />
+                  </div>
+
+                  <div className="max-h-40 overflow-y-auto divide-y divide-slate-800 border border-slate-800 rounded-xl bg-slate-950/40">
+                    {filteredProducts.length === 0 ? (
+                      <p className="p-4 text-center text-slate-500 text-xs">{t.noData}</p>
+                    ) : (
+                      filteredProducts.map(p => (
+                        <div 
+                          key={p.id}
+                          onClick={() => handleSimulateScan(p)}
+                          className="flex items-center justify-between p-2.5 hover:bg-slate-800/80 transition-colors cursor-pointer text-xs"
+                        >
+                          <div className="space-y-0.5">
+                            <span className="font-bold text-slate-200 block">{p.name}</span>
+                            <span className="text-[10px] font-mono text-slate-500">Code: {p.code}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-mono text-slate-400 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded-lg font-bold">
+                              {p.quantity} pcs
+                            </span>
+                            <button
+                              type="button"
+                              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-1 px-2 rounded-lg text-[10px] flex items-center gap-1"
+                            >
+                              <Barcode className="w-3 h-3" />
+                              {language === 'ar' ? 'مسح باركود' : 'Sim Scan'}
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Footer controls */}
+        <div className="p-4 bg-slate-900 border-t border-slate-800 flex justify-end gap-2 text-xs">
+          <button
+            type="button"
+            onClick={onClose}
+            className="bg-slate-800 hover:bg-slate-750 text-slate-300 font-bold py-2 px-4 rounded-xl cursor-pointer"
+          >
+            {t.cancel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

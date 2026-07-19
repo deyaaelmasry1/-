@@ -1,0 +1,1507 @@
+import React, { useState, useMemo, useRef } from 'react';
+import { Product, Category, Supplier, Warehouse } from '../types';
+import { translations, Language } from '../utils/translations';
+import { printHtml } from '../utils/printHelper';
+import { 
+  Search, 
+  Filter, 
+  Plus, 
+  Edit2, 
+  Trash2, 
+  Download, 
+  Upload, 
+  Barcode, 
+  Printer, 
+  X, 
+  Tags, 
+  RefreshCw,
+  AlertCircle,
+  HelpCircle,
+  Sparkles,
+  Share2,
+  Eye,
+  ChevronLeft,
+  ChevronRight
+} from 'lucide-react';
+
+interface InventoryProps {
+  products: Product[];
+  categories: Category[];
+  suppliers: Supplier[];
+  warehouses?: Warehouse[];
+  setWarehouses?: React.Dispatch<React.SetStateAction<Warehouse[]>>;
+  language: Language;
+  onAddProduct: (product: Omit<Product, 'id'>) => void;
+  onUpdateProduct: (product: Product) => void;
+  onDeleteProduct: (id: string) => void;
+  onAddCategory: (category: Omit<Category, 'id'>) => void;
+  onImportProducts: (imported: Product[]) => void;
+  showToast?: (msg: string, type?: 'success' | 'error') => void;
+  selectedProductIdFromNotification?: string | null;
+  onClearNotificationProductId?: () => void;
+  currencySymbol?: string;
+}
+
+export default function Inventory({
+  products,
+  categories,
+  suppliers,
+  warehouses = [],
+  setWarehouses = () => {},
+  language,
+  onAddProduct,
+  onUpdateProduct,
+  onDeleteProduct,
+  onAddCategory,
+  onImportProducts,
+  showToast,
+  selectedProductIdFromNotification,
+  onClearNotificationProductId,
+  currencySymbol = language === 'ar' ? 'ج.م' : '$'
+}: InventoryProps) {
+  const t = translations[language];
+  const isRtl = language === 'ar';
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const localizedName = (value: unknown, fallback = '') => {
+    const raw = value == null ? fallback : String(value);
+    const parts = raw.split(' | ');
+    return (parts[language === 'ar' ? 1 : 0] || parts[0] || fallback).trim();
+  };
+
+  // Search & Filter state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('ALL');
+  const [stockStatusFilter, setStockStatusFilter] = useState<'ALL' | 'LOW' | 'OUT'>('ALL');
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Listen to scanned barcode searches
+  React.useEffect(() => {
+    const handleScannedSearch = (e: Event) => {
+      const customEvent = e as CustomEvent<string>;
+      if (customEvent.detail) {
+        setSearchQuery(customEvent.detail);
+      }
+    };
+
+    const saved = localStorage.getItem('scanned_search_query');
+    if (saved) {
+      setSearchQuery(saved);
+      localStorage.removeItem('scanned_search_query');
+    }
+
+    window.addEventListener('scanned_search_event' as any, handleScannedSearch);
+    return () => {
+      window.removeEventListener('scanned_search_event' as any, handleScannedSearch);
+    };
+  }, []);
+
+  // Reset page when filters or search query change
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, selectedCategory, stockStatusFilter]);
+
+  // Form Modals states
+  const [isProductModalOpen, setIsProductModalOpen] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [isBarcodeModalOpen, setIsBarcodeModalOpen] = useState(false);
+  const [selectedProductForBarcode, setSelectedProductForBarcode] = useState<Product | null>(null);
+  const [selectedProductForDetails, setSelectedProductForDetails] = useState<Product | null>(null);
+
+  // New Product form state
+  const [formSku, setFormSku] = useState('');
+  const [formName, setFormName] = useState('');
+  const [formCategory, setFormCategory] = useState('');
+  const [formQty, setFormQty] = useState(0);
+  const [formMinQty, setFormMinQty] = useState(5);
+  const [formCost, setFormCost] = useState(0);
+  const [formPrice, setFormPrice] = useState(0);
+  const [formSupplier, setFormSupplier] = useState('');
+  const [formLocation, setFormLocation] = useState('');
+  const [formDesc, setFormDesc] = useState('');
+
+  // Warehouse search and selection state
+  const [formWarehouseId, setFormWarehouseId] = useState('');
+  const [warehouseSearchQuery, setWarehouseSearchQuery] = useState('');
+  const [isWarehouseDropdownOpen, setIsWarehouseDropdownOpen] = useState(false);
+
+  // New Category form state
+  const [newCatName, setNewCatName] = useState('');
+
+  // Quick Warehouse form state
+  const [isWarehouseModalOpen, setIsWarehouseModalOpen] = useState(false);
+  const [quickWhName, setQuickWhName] = useState('');
+  const [quickWhLocation, setQuickWhLocation] = useState('');
+
+  // 1. Generate unique SKU Barcode shortcut
+  const handleGenerateSku = () => {
+    const rand = Math.floor(100000 + Math.random() * 900000);
+    setFormSku(`SKU-${rand}`);
+  };
+
+  // Open modal for Add Product
+  const openAddModal = () => {
+    setEditingProduct(null);
+    setFormSku('');
+    setFormName('');
+    setFormCategory(categories[0]?.id || '');
+    setFormQty(0);
+    setFormMinQty(5);
+    setFormCost(0);
+    setFormPrice(0);
+    setFormSupplier(suppliers[0]?.id || '');
+    setFormLocation('');
+    setFormDesc('');
+    setFormWarehouseId(warehouses[0]?.id || '');
+    setWarehouseSearchQuery(warehouses[0]?.name || '');
+    setIsProductModalOpen(true);
+  };
+
+  // Open modal for Edit Product
+  const openEditModal = (p: Product) => {
+    setEditingProduct(p);
+    setFormSku(p.code);
+    setFormName(p.name);
+    setFormCategory(p.categoryId);
+    setFormQty(p.quantity);
+    setFormMinQty(p.minQuantity);
+    setFormCost(p.costPrice);
+    setFormPrice(p.sellingPrice);
+    setFormSupplier(p.supplierId || '');
+    setFormLocation(p.location || '');
+    setFormDesc(p.description || '');
+    
+    // Set warehouse state based on product's warehouseId
+    setFormWarehouseId(p.warehouseId || '');
+    const currentWh = warehouses.find(w => w.id === p.warehouseId);
+    setWarehouseSearchQuery(currentWh ? currentWh.name : '');
+    
+    setIsProductModalOpen(true);
+  };
+
+  // Triggered when clicking a notification from another tab
+  React.useEffect(() => {
+    if (selectedProductIdFromNotification) {
+      const prod = products.find(p => p.id === selectedProductIdFromNotification);
+      if (prod) {
+        // Set search query to SKU or product name to filter down to this product
+        setSearchQuery(prod.code);
+        // Set current page to 1
+        setCurrentPage(1);
+        // Open the Edit Modal!
+        openEditModal(prod);
+      }
+      // Clear the trigger in parent
+      if (onClearNotificationProductId) {
+        onClearNotificationProductId();
+      }
+    }
+  }, [selectedProductIdFromNotification, products]);
+
+  // Save product form submission
+  const handleSaveProduct = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formSku.trim() || !formName.trim() || !formCategory) {
+      alert(language === 'ar' ? 'الرمز الكودي واسم الصنف والفئة حقول مطلوبة!' : 'SKU, Name, and Category are required!');
+      return;
+    }
+
+    if (!formWarehouseId) {
+      alert(language === 'ar' ? 'الرجاء تحديد مستودع تخزين للمنتج!' : 'Please select a storage warehouse for the product!');
+      return;
+    }
+
+    const payload = {
+      code: formSku,
+      name: formName,
+      categoryId: formCategory,
+      quantity: Number(formQty),
+      minQuantity: Number(formMinQty),
+      costPrice: Number(formCost),
+      sellingPrice: Number(formPrice),
+      supplierId: formSupplier || undefined,
+      location: formLocation || undefined,
+      warehouseId: formWarehouseId || undefined,
+      description: formDesc || undefined
+    };
+
+    if (editingProduct) {
+      onUpdateProduct({ ...payload, id: editingProduct.id });
+    } else {
+      onAddProduct(payload);
+    }
+    setIsProductModalOpen(false);
+  };
+
+  // Save new category
+  const handleSaveCategory = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCatName.trim()) return;
+    onAddCategory({ name: newCatName });
+    setNewCatName('');
+    setIsCategoryModalOpen(false);
+  };
+
+  // Save quick warehouse
+  const handleSaveQuickWarehouse = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickWhName.trim()) return;
+    const newWH: Warehouse = {
+      id: `wh_${Date.now()}`,
+      name: quickWhName,
+      location: quickWhLocation
+    };
+    setWarehouses(prev => [...prev, newWH]);
+    if (showToast) {
+      showToast(isRtl ? 'تم إضافة المستودع بنجاح!' : 'Warehouse added successfully!', 'success');
+    }
+    setQuickWhName('');
+    setQuickWhLocation('');
+    setIsWarehouseModalOpen(false);
+  };
+
+  // 2a. Filter products based on category and stock alerts (Base list without search)
+  const baseFilteredProducts = useMemo(() => {
+    return products.filter(p => {
+      // Category filter first
+      const matchesCategory = selectedCategory === 'ALL' || p.categoryId === selectedCategory;
+      if (!matchesCategory) return false;
+
+      // Stock status filter
+      let matchesStock = true;
+      if (stockStatusFilter === 'LOW') {
+        matchesStock = p.quantity <= p.minQuantity && p.quantity > 0;
+      } else if (stockStatusFilter === 'OUT') {
+        matchesStock = p.quantity <= 0;
+      }
+      return matchesStock;
+    });
+  }, [products, selectedCategory, stockStatusFilter]);
+
+  // 2b. Filter products based on search query (substring search matching in any position)
+  const searchedFilteredProducts = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return baseFilteredProducts;
+
+    return baseFilteredProducts.filter(p => {
+      return (
+        p.name.toLowerCase().includes(query) || 
+        p.code.toLowerCase().includes(query) || 
+        (p.location && p.location.toLowerCase().includes(query)) ||
+        (p.description && p.description.toLowerCase().includes(query))
+      );
+    });
+  }, [baseFilteredProducts, searchQuery]);
+
+  // Helper to find the page number where a product resides in the base list
+  const findProductPageInBase = (productId: string) => {
+    const idx = baseFilteredProducts.findIndex(p => p.id === productId);
+    if (idx === -1) return 1;
+    return Math.floor(idx / 10) + 1;
+  };
+
+  // 2c. Slice products for current page (10 per page)
+  const ITEMS_PER_PAGE = 10;
+  const totalPages = Math.ceil(searchedFilteredProducts.length / ITEMS_PER_PAGE) || 1;
+
+  const filteredProducts = useMemo(() => {
+    // Keep currentPage in bounds
+    const activePage = Math.min(currentPage, totalPages);
+    const startIdx = (activePage - 1) * ITEMS_PER_PAGE;
+    return searchedFilteredProducts.slice(startIdx, startIdx + ITEMS_PER_PAGE);
+  }, [searchedFilteredProducts, currentPage, totalPages]);
+
+  // 3. Export CSV functionality
+  const handleExportCsv = () => {
+    if (products.length === 0) return;
+    
+    // Header
+    const headers = ['ID', 'SKU/Barcode', 'Name', 'Category', 'Quantity', 'Min Alert', 'Cost Price', 'Selling Price', 'Location', 'Description'];
+    const csvRows = [headers.join(',')];
+
+    products.forEach(p => {
+      const categoryName = categories.find(c => c.id === p.categoryId)?.name || p.categoryId;
+      const row = [
+        p.id,
+        `"${p.code.replace(/"/g, '""')}"`,
+        `"${p.name.replace(/"/g, '""')}"`,
+        `"${categoryName.replace(/"/g, '""')}"`,
+        p.quantity,
+        p.minQuantity,
+        p.costPrice,
+        p.sellingPrice,
+        `"${(p.location || '').replace(/"/g, '""')}"`,
+        `"${(p.description || '').replace(/"/g, '""')}"`
+      ];
+      csvRows.push(row.join(','));
+    });
+
+    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + csvRows.join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', 'MyStoreInventory_Backup.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // 4. Import CSV functionality
+  const handleImportCsv = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        const lines = text.split('\n');
+        if (lines.length < 2) return;
+
+        const importedList: Product[] = [];
+        
+        // Parse simple CSV (skipping first row of headers)
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (!line) continue;
+          
+          // Regex to split comma-separated lines but ignore commas inside double quotes
+          const matches = line.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g) || line.split(',');
+          if (matches.length < 8) continue;
+
+          const cleanStr = (s: string) => s ? s.replace(/^"|"$/g, '').trim() : '';
+
+          // Look up or match category
+          const csvCategoryName = cleanStr(matches[3]);
+          let categoryId = categories[0]?.id || 'cat_1';
+          const matchedCat = categories.find(c => c.name.toLowerCase().includes(csvCategoryName.toLowerCase()));
+          if (matchedCat) {
+            categoryId = matchedCat.id;
+          }
+
+          importedList.push({
+            id: cleanStr(matches[0]) || `imported_${Math.random().toString(36).substr(2, 9)}`,
+            code: cleanStr(matches[1]) || `SKU-${Math.floor(100000 + Math.random() * 900000)}`,
+            name: cleanStr(matches[2]) || 'Imported Product',
+            categoryId,
+            quantity: Number(matches[4]) || 0,
+            minQuantity: Number(matches[5]) || 5,
+            costPrice: Number(matches[6]) || 0,
+            sellingPrice: Number(matches[7]) || 0,
+            location: matches[8] ? cleanStr(matches[8]) : undefined,
+            description: matches[9] ? cleanStr(matches[9]) : undefined,
+          });
+        }
+
+        if (importedList.length > 0) {
+          onImportProducts(importedList);
+          alert(`Successfully imported ${importedList.length} products!`);
+        } else {
+          alert('No valid products parsed from CSV. Please check the columns formatting.');
+        }
+      } catch (err) {
+        console.error(err);
+        alert('Error parsing CSV file. Ensure columns match: SKU, Name, Category, Quantity, Min Level, Cost, Price, Location');
+      }
+    };
+    reader.readAsText(file);
+    // Reset file input
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // Open barcode generator modal
+  const openBarcodeModal = (p: Product) => {
+    setSelectedProductForBarcode(p);
+    setIsBarcodeModalOpen(true);
+  };
+
+  const handlePrintBarcode = () => {
+    window.print();
+  };
+
+  return (
+    <div className="space-y-6" dir={isRtl ? 'rtl' : 'ltr'}>
+      {/* Comprehensive Guided Onboarding Banner if empty */}
+      {products.length === 0 && (
+        <div className="bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 rounded-3xl p-6 text-white shadow-md flex flex-col sm:flex-row items-center justify-between gap-5 animate-in fade-in zoom-in-95 duration-200">
+          <div className="space-y-1.5 text-center sm:text-start">
+            <h4 className="font-black text-base flex items-center justify-center sm:justify-start gap-2">
+              <Sparkles className="w-5 h-5 text-yellow-300 animate-pulse" />
+              {isRtl ? 'أهلاً بك في صفحة مخزنك السحرية! 📦' : 'Welcome to Your Magical Inventory! 📦'}
+            </h4>
+            <p className="text-xs text-white/95 font-semibold leading-relaxed max-w-2xl">
+              {isRtl 
+                ? 'مخزنك فارغ كلياً حالياً ومستعد لتعبئة بضاعتك. يمكنك الضغط على زر إضافة منتج الأخضر في اليسار، أو إنشاء فئة بضائع جديدة لتنظيم السلع، أو استيراد ملفات الداتا لتبدأ فوراً بكل سهولة.' 
+                : 'Your stock list is completely empty! Tap the shiny button on the right to add your very first product.'}
+            </p>
+          </div>
+          <button
+            onClick={openAddModal}
+            className="bg-white text-orange-600 hover:bg-orange-50 font-black text-xs px-6 py-3.5 rounded-2xl transition shadow-lg shrink-0 cursor-pointer animate-bounce border-none outline-none"
+          >
+            {isRtl ? '✨ أضف أول منتج الآن وبكل بساطة!' : '✨ Add First Product Now!'}
+          </button>
+        </div>
+      )}
+
+      {/* Header operations bar */}
+      <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-black text-slate-800 font-sans tracking-tight">
+            {t.inventory}
+          </h2>
+          <p className="text-xs text-slate-400 mt-1 font-semibold">
+            {t.backupNotice}
+          </p>
+        </div>
+        
+        {/* Actions buttons container */}
+        <div className="flex gap-2 flex-wrap">
+          {/* Add Product Button */}
+          <button 
+            id="btn-add-product"
+            onClick={openAddModal}
+            className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-md shadow-indigo-600/10 transition cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            {t.addProduct}
+          </button>
+
+          {/* Add Category Button */}
+          <button 
+            id="btn-add-cat"
+            onClick={() => setIsCategoryModalOpen(true)}
+            className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer"
+          >
+            <Tags className="w-4 h-4" />
+            {t.addCategory}
+          </button>
+
+          {/* Add Quick Warehouse Button */}
+          <button 
+            id="btn-add-wh-quick"
+            onClick={() => setIsWarehouseModalOpen(true)}
+            className="flex items-center gap-1.5 bg-cyan-50 hover:bg-cyan-100 text-cyan-700 px-4 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            {isRtl ? 'إضافة مستودع سريع 🏢' : 'Add Quick Warehouse 🏢'}
+          </button>
+
+          {/* Export CSV */}
+          <button 
+            id="btn-export-csv"
+            onClick={handleExportCsv}
+            className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer"
+            title={t.exportCsv}
+          >
+            <Download className="w-4 h-4" />
+            {t.exportCsv}
+          </button>
+
+          {/* Import CSV */}
+          <button 
+            id="btn-trigger-import"
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-1.5 bg-violet-50 hover:bg-violet-100 text-violet-700 px-4 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer"
+            title={t.importCsv}
+          >
+            <Upload className="w-4 h-4" />
+            {t.importCsv}
+          </button>
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            onChange={handleImportCsv} 
+            accept=".csv" 
+            className="hidden" 
+          />
+        </div>
+      </div>
+
+      {/* Searching & Filters Panel */}
+      <div className="bg-white p-4 rounded-2xl border border-slate-200/60 shadow-xs space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
+          {/* Search Input */}
+          <div className="relative md:col-span-6">
+            <Search className={`absolute top-2.5 w-4 h-4 text-slate-400 ${isRtl ? 'right-3' : 'left-3'}`} />
+            <input 
+              type="text" 
+              placeholder={t.searchPlaceholder}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className={`w-full bg-slate-50 border border-slate-200/60 rounded-xl py-2 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 text-slate-700 ${isRtl ? 'pr-9 pl-3' : 'pl-9 pr-3'}`}
+            />
+          </div>
+
+          {/* Category Dropdown */}
+          <div className="md:col-span-3">
+            <select
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-200/60 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 font-semibold"
+            >
+              <option value="ALL">📁 {t.filterAll}</option>
+              {categories.map(cat => (
+                <option key={cat.id} value={cat.id}>
+                  {localizedName(cat.name, cat.id)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Alert Filter Toggles */}
+          <div className="md:col-span-3 flex bg-slate-50 border border-slate-200/60 rounded-xl p-0.5">
+            <button
+              onClick={() => setStockStatusFilter('ALL')}
+              className={`flex-1 text-[10px] md:text-xs font-bold py-1.5 px-2 rounded-lg transition-all ${stockStatusFilter === 'ALL' ? 'bg-white text-slate-800 shadow-3xs' : 'text-slate-400'}`}
+            >
+              {language === 'ar' ? 'الكل' : 'All'}
+            </button>
+            <button
+              onClick={() => setStockStatusFilter('LOW')}
+              className={`flex-1 text-[10px] md:text-xs font-bold py-1.5 px-2 rounded-lg transition-all ${stockStatusFilter === 'LOW' ? 'bg-amber-500 text-white shadow-3xs' : 'text-slate-400'}`}
+            >
+              ⚠️ {language === 'ar' ? 'نقص' : 'Low'}
+            </button>
+            <button
+              onClick={() => setStockStatusFilter('OUT')}
+              className={`flex-1 text-[10px] md:text-xs font-bold py-1.5 px-2 rounded-lg transition-all ${stockStatusFilter === 'OUT' ? 'bg-red-500 text-white shadow-3xs' : 'text-slate-400'}`}
+            >
+              🚫 {language === 'ar' ? 'نفد' : 'Out'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Inventory Database Table */}
+      <div className="bg-white rounded-2xl border border-slate-200/60 shadow-xs overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs text-slate-650 border-collapse">
+            <thead className="bg-[#1e293b] text-slate-200 font-bold border-b border-slate-800 uppercase text-[10px]">
+              <tr>
+                <th className={`p-4 text-center ${isRtl ? 'text-right' : 'text-left'}`}>{t.sku}</th>
+                <th className={`p-4 ${isRtl ? 'text-right' : 'text-left'}`}>{t.productName}</th>
+                <th className={`p-4 ${isRtl ? 'text-right' : 'text-left'}`}>{t.category}</th>
+                <th className={`p-4 ${isRtl ? 'text-right' : 'text-left'}`}>{t.quantity}</th>
+                <th className={`p-4 ${isRtl ? 'text-right' : 'text-left'}`}>{t.costPrice}</th>
+                <th className={`p-4 ${isRtl ? 'text-right' : 'text-left'}`}>{t.sellingPrice}</th>
+                <th className={`p-4 ${isRtl ? 'text-right' : 'text-left'}`}>{t.location}</th>
+                <th className={`p-4 ${isRtl ? 'text-right' : 'text-left'}`}>{t.status}</th>
+                <th className="p-4 text-center">{t.actions}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filteredProducts.length === 0 ? (
+                <tr>
+                  <td colSpan={9} className="p-8 text-center text-slate-400">
+                    <HelpCircle className="w-8 h-8 mx-auto text-slate-300 mb-2" />
+                    {t.noData}
+                  </td>
+                </tr>
+              ) : (
+                filteredProducts.map(p => {
+                  const isOut = p.quantity <= 0;
+                  const isLow = p.quantity <= p.minQuantity && p.quantity > 0;
+                  const rowBg = isOut ? 'bg-red-50/10' : isLow ? 'bg-amber-50/10' : 'bg-transparent';
+                  const categoryName = categories.find(c => c.id === p.categoryId)?.name || p.categoryId;
+
+                  return (
+                    <tr 
+                      key={p.id} 
+                      className={`${rowBg} hover:bg-indigo-50/25 transition-colors cursor-pointer`}
+                      onClick={(e) => {
+                        if ((e.target as HTMLElement).closest('button')) return;
+                        setSelectedProductForDetails(p);
+                      }}
+                    >
+                      {/* Barcode/SKU Column */}
+                      <td className="p-4 font-mono font-bold text-slate-800 text-center">
+                        <span className="bg-slate-100 px-2 py-1 rounded border border-slate-200">
+                          {p.code}
+                        </span>
+                      </td>
+
+                      {/* Name & Desc */}
+                      <td className={`p-4 font-medium text-slate-900 ${isRtl ? 'text-right' : 'text-left'}`}>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div>
+                            <p className="font-bold text-sm text-slate-800">{p.name}</p>
+                            {p.description && (
+                              <p className="text-[10px] text-slate-400 mt-0.5 line-clamp-1 font-semibold">{p.description}</p>
+                            )}
+                          </div>
+                          {searchQuery.trim() && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const targetPage = findProductPageInBase(p.id);
+                                setSearchQuery(''); // Clear search
+                                setCurrentPage(targetPage); // Go to page
+                              }}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-black bg-indigo-50 text-indigo-700 hover:bg-indigo-150 transition-all border border-indigo-250 cursor-pointer shadow-3xs"
+                              title={isRtl ? 'اضغط للذهاب إلى هذه الصفحة وجلب المنتج في سياقه' : 'Click to go to this page and see product in context'}
+                            >
+                              <span>{isRtl ? 'الصفحة' : 'Page'} {findProductPageInBase(p.id)}</span>
+                            </button>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Category */}
+                      <td className={`p-4 ${isRtl ? 'text-right' : 'text-left'}`}>
+                        <span className="text-slate-500 font-bold bg-slate-50 border border-slate-200/60 px-2.5 py-1 rounded-lg text-[11px]">
+                          {localizedName(categoryName, p.categoryId || '')}
+                        </span>
+                      </td>
+
+                      {/* Stock Quantity */}
+                      <td className={`p-4 font-black font-mono text-sm text-slate-800 ${isRtl ? 'text-right' : 'text-left'}`}>
+                        {p.quantity}
+                      </td>
+
+                      {/* Cost Price */}
+                      <td className={`p-4 font-mono font-semibold text-slate-600 ${isRtl ? 'text-right' : 'text-left'}`}>
+                        {currencySymbol}{p.costPrice.toFixed(2)}
+                      </td>
+
+                      {/* Selling Price */}
+                      <td className={`p-4 font-mono font-bold text-indigo-750 ${isRtl ? 'text-right' : 'text-left'}`}>
+                        {currencySymbol}{p.sellingPrice.toFixed(2)}
+                      </td>
+
+                      {/* Warehouse Name & Shelf */}
+                      <td className={`p-4 text-slate-500 font-semibold ${isRtl ? 'text-right' : 'text-left'}`}>
+                        <div className="flex flex-col gap-0.5">
+                          <span className="font-extrabold text-slate-800 text-[11px] bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md inline-block w-fit">
+                            {warehouses.find(w => w.id === p.warehouseId)?.name || (isRtl ? 'المستودع الرئيسي' : 'Main Warehouse')}
+                          </span>
+                          {p.location && (
+                            <span className="text-[10px] text-slate-450">({p.location})</span>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Status indicator badge */}
+                      <td className={`p-4 ${isRtl ? 'text-right' : 'text-left'}`}>
+                        {isOut ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-red-100 text-red-800">
+                            <span className="w-1.5 h-1.5 rounded-full bg-red-600"></span>
+                            {t.outOfStock}
+                          </span>
+                        ) : isLow ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                            {t.lowStock}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-850">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-550"></span>
+                            {t.inStock}
+                          </span>
+                        )}
+                      </td>
+
+                      {/* Action buttons */}
+                      <td className="p-4 flex gap-1.5 items-center justify-center">
+                        {/* View details */}
+                        <button
+                          onClick={() => setSelectedProductForDetails(p)}
+                          className="p-1.5 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg border border-blue-100 transition cursor-pointer"
+                          title={isRtl ? 'عرض التفاصيل' : 'View Details'}
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
+
+                        {/* Barcode label trigger */}
+                        <button
+                          onClick={() => openBarcodeModal(p)}
+                          className="p-1.5 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-lg border border-slate-250 transition cursor-pointer"
+                          title={t.printBarcode}
+                        >
+                          <Barcode className="w-3.5 h-3.5" />
+                        </button>
+
+                        {/* Edit Button */}
+                        <button
+                          onClick={() => openEditModal(p)}
+                          className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-lg border border-indigo-100 transition cursor-pointer"
+                          title={t.editProduct}
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+
+                        {/* Delete Button */}
+                        <button
+                          onClick={() => {
+                            if (window.confirm(t.confirmDelete)) {
+                              onDeleteProduct(p.id);
+                            }
+                          }}
+                          className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg border border-red-100 transition cursor-pointer"
+                          title={t.deleteProduct}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Pagination and Status Bar */}
+        <div className="flex flex-col sm:flex-row items-center justify-between p-4 bg-slate-50 border-t border-slate-100 gap-4" dir={isRtl ? 'rtl' : 'ltr'}>
+          <div className="text-xs text-slate-500 font-semibold">
+            {isRtl ? (
+              <span>
+                يتم عرض <span className="font-bold text-indigo-600">{searchedFilteredProducts.length === 0 ? 0 : Math.min(searchedFilteredProducts.length, (currentPage - 1) * ITEMS_PER_PAGE + 1)}-{Math.min(searchedFilteredProducts.length, currentPage * ITEMS_PER_PAGE)}</span> من أصل <span className="font-bold text-slate-800">{searchedFilteredProducts.length}</span> منتج
+              </span>
+            ) : (
+              <span>
+                Showing <span className="font-bold text-indigo-600">{searchedFilteredProducts.length === 0 ? 0 : Math.min(searchedFilteredProducts.length, (currentPage - 1) * ITEMS_PER_PAGE + 1)}-{Math.min(searchedFilteredProducts.length, currentPage * ITEMS_PER_PAGE)}</span> of <span className="font-bold text-slate-800">{searchedFilteredProducts.length}</span> products
+              </span>
+            )}
+            {searchQuery.trim() && (
+              <span className="inline-block bg-indigo-50 text-indigo-700 text-[10px] px-2 py-0.5 rounded-full border border-indigo-100 font-bold ml-2">
+                {isRtl ? 'نتائج البحث' : 'Search Results'}
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            {/* Previous Button */}
+            <button
+              onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+              disabled={currentPage === 1}
+              className={`p-1.5 rounded-lg border transition-all cursor-pointer flex items-center justify-center ${
+                currentPage === 1 
+                  ? 'border-slate-200 text-slate-300 bg-slate-100 cursor-not-allowed' 
+                  : 'border-slate-250 text-slate-600 bg-white hover:bg-slate-50 hover:text-indigo-600'
+              }`}
+              title={isRtl ? 'الصفحة السابقة' : 'Previous Page'}
+            >
+              {isRtl ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+            </button>
+
+            {/* Page Buttons */}
+            <div className="flex items-center gap-1">
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => {
+                const isFirst = pageNum === 1;
+                const isLast = pageNum === totalPages;
+                const isNearCurrent = Math.abs(pageNum - currentPage) <= 1;
+
+                if (totalPages > 6 && !isFirst && !isLast && !isNearCurrent) {
+                  // Show ellipsis
+                  if (pageNum === 2 || pageNum === totalPages - 1) {
+                    return <span key={pageNum} className="text-slate-400 px-1 text-xs">...</span>;
+                  }
+                  return null;
+                }
+
+                return (
+                  <button
+                    key={pageNum}
+                    onClick={() => setCurrentPage(pageNum)}
+                    className={`min-w-8 h-8 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      currentPage === pageNum
+                        ? 'bg-indigo-600 text-white shadow-xs font-extrabold border border-indigo-600'
+                        : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-250'
+                    }`}
+                  >
+                    {pageNum}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Next Button */}
+            <button
+              onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+              disabled={currentPage === totalPages}
+              className={`p-1.5 rounded-lg border transition-all cursor-pointer flex items-center justify-center ${
+                currentPage === totalPages 
+                  ? 'border-slate-200 text-slate-300 bg-slate-100 cursor-not-allowed' 
+                  : 'border-slate-250 text-slate-600 bg-white hover:bg-slate-50 hover:text-indigo-600'
+              }`}
+              title={isRtl ? 'الصفحة التالية' : 'Next Page'}
+            >
+              {isRtl ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* --- MODAL 1: ADD/EDIT PRODUCT FORM --- */}
+      {isProductModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 flex items-center justify-center p-4 z-50 overflow-y-auto backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden border border-slate-200/80" dir={isRtl ? 'rtl' : 'ltr'}>
+            <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-[#1e293b] text-white">
+              <h3 className="font-bold text-sm tracking-tight">
+                {editingProduct ? t.editProduct : t.addProduct}
+              </h3>
+              <button onClick={() => setIsProductModalOpen(false)} className="text-slate-300 hover:text-white transition">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveProduct} className="p-6 space-y-4">
+              {/* Sku Code & Generator */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-555 mb-1">{t.sku} *</label>
+                  <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      required
+                      placeholder="e.g. SKU-100234"
+                      value={formSku}
+                      onChange={(e) => setFormSku(e.target.value)}
+                      className="flex-1 bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleGenerateSku}
+                      className="bg-slate-100 hover:bg-slate-250 text-slate-700 text-xs font-bold px-3 rounded-xl border border-slate-200 transition flex items-center gap-1 cursor-pointer"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      {t.generateSku}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Product Name */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-555 mb-1">{t.productName} *</label>
+                  <input 
+                    type="text" 
+                    required
+                    placeholder="e.g. iPhone 15"
+                    value={formName}
+                    onChange={(e) => setFormName(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* Category & Location */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-555 mb-1">{t.category} *</label>
+                  <select
+                    value={formCategory}
+                    onChange={(e) => setFormCategory(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                  >
+                    {categories.map(cat => (
+                      <option key={cat.id} value={cat.id}>
+                        {localizedName(cat.name, cat.id)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Searchable Warehouse Dropdown */}
+                <div className="relative">
+                  <label className="block text-xs font-bold text-slate-555 mb-1">
+                    {language === 'ar' ? 'المستودع المرتبط *' : 'Linked Warehouse *'}
+                  </label>
+                  <div className="relative">
+                    <input 
+                      type="text" 
+                      required
+                      placeholder={language === 'ar' ? 'ابحث عن مستودع...' : 'Search warehouse...'}
+                      value={warehouseSearchQuery}
+                      onChange={(e) => {
+                        setWarehouseSearchQuery(e.target.value);
+                        setIsWarehouseDropdownOpen(true);
+                        if (!e.target.value) {
+                          setFormWarehouseId('');
+                        }
+                      }}
+                      onFocus={() => setIsWarehouseDropdownOpen(true)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-bold"
+                    />
+                    <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                      <Search className="w-3.5 h-3.5 text-slate-450" />
+                    </div>
+                  </div>
+
+                  {isWarehouseDropdownOpen && (
+                    <>
+                      <div className="fixed inset-0 z-10" onClick={() => setIsWarehouseDropdownOpen(false)}></div>
+                      <div className="absolute z-25 left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg p-1 space-y-0.5">
+                        {(() => {
+                          const query = warehouseSearchQuery.toLowerCase().trim();
+                          const filtered = warehouses.filter(w => 
+                            w.name.toLowerCase().includes(query) || 
+                            (w.location && w.location.toLowerCase().includes(query))
+                          );
+
+                          if (filtered.length === 0) {
+                            return (
+                              <div className="p-2 text-center text-xs text-slate-400">
+                                <p>{language === 'ar' ? 'لا يوجد مستودع مطابق' : 'No matching warehouse'}</p>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsWarehouseDropdownOpen(false);
+                                    setIsWarehouseModalOpen(true);
+                                  }}
+                                  className="mt-1 text-indigo-600 hover:text-indigo-800 font-bold text-[10px] underline cursor-pointer"
+                                >
+                                  {language === 'ar' ? 'أضف مستودع سريع جديد +' : 'Add a new quick warehouse +'}
+                                </button>
+                              </div>
+                            );
+                          }
+
+                          return filtered.map(wh => (
+                            <button
+                              key={wh.id}
+                              type="button"
+                              onClick={() => {
+                                setFormWarehouseId(wh.id);
+                                setWarehouseSearchQuery(wh.name);
+                                setIsWarehouseDropdownOpen(false);
+                              }}
+                              className={`w-full text-left px-3 py-2 rounded-lg text-xs hover:bg-slate-50 transition-colors flex items-center justify-between font-bold cursor-pointer ${
+                                formWarehouseId === wh.id ? 'bg-indigo-50/50 text-indigo-600' : 'text-slate-700'
+                              }`}
+                            >
+                              <span>{wh.name}</span>
+                              {wh.location && <span className="text-[10px] text-slate-400 font-normal">({wh.location})</span>}
+                            </button>
+                          ));
+                        })()}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Warehouse Shelf Location */}
+              <div>
+                <label className="block text-xs font-bold text-slate-555 mb-1">
+                  {language === 'ar' ? 'تفاصيل الرف أو موقع التخزين الداخلي (اختياري)' : 'Shelf Location Details inside Warehouse (Optional)'}
+                </label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. Shelf B, Row 4"
+                  value={formLocation}
+                  onChange={(e) => setFormLocation(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                />
+              </div>
+
+              {/* Qty & MinQty */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-555 mb-1">{t.quantity}</label>
+                  <input 
+                    type="number" 
+                    min="0"
+                    value={formQty}
+                    onChange={(e) => setFormQty(Number(e.target.value))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-555 mb-1">{t.minQuantity} (Reorder Limit)</label>
+                  <input 
+                    type="number" 
+                    min="0"
+                    value={formMinQty}
+                    onChange={(e) => setFormMinQty(Number(e.target.value))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* Cost & Selling Prices */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-555 mb-1">{t.costPrice} ({currencySymbol})</label>
+                  <input 
+                    type="number" 
+                    step="0.01"
+                    min="0"
+                    value={formCost}
+                    onChange={(e) => setFormCost(Number(e.target.value))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-555 mb-1">{t.sellingPrice} ({currencySymbol})</label>
+                  <input 
+                    type="number" 
+                    step="0.01"
+                    min="0"
+                    value={formPrice}
+                    onChange={(e) => setFormPrice(Number(e.target.value))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* Supplier Primary Link */}
+              <div>
+                <label className="block text-xs font-bold text-slate-555 mb-1">{t.supplier}</label>
+                <select
+                  value={formSupplier}
+                  onChange={(e) => setFormSupplier(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                >
+                  <option value="">{language === 'ar' ? '— اختر مورد رئيسي —' : '— Select Primary Supplier —'}</option>
+                  {suppliers.map(sup => (
+                    <option key={sup.id} value={sup.id}>
+                      {sup.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Description Details */}
+              <div>
+                <label className="block text-xs font-bold text-slate-555 mb-1">{t.description}</label>
+                <textarea 
+                  rows={2}
+                  placeholder="e.g. Technical descriptions or specifications"
+                  value={formDesc}
+                  onChange={(e) => setFormDesc(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                ></textarea>
+              </div>
+
+              {/* Footer buttons */}
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsProductModalOpen(false)}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-4 py-2.5 rounded-xl transition cursor-pointer"
+                >
+                  {t.cancel}
+                </button>
+                <button
+                  type="submit"
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow-md shadow-indigo-600/10 transition cursor-pointer"
+                >
+                  {t.save}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL 2: ADD CATEGORY FORM --- */}
+      {isCategoryModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 flex items-center justify-center p-4 z-50 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200/80" dir={isRtl ? 'rtl' : 'ltr'}>
+            <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-[#1e293b] text-white">
+              <h3 className="font-bold text-sm tracking-tight">
+                {t.addCategory}
+              </h3>
+              <button onClick={() => setIsCategoryModalOpen(false)} className="text-slate-300 hover:text-white transition">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCategory} className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-555 mb-1">{t.categoryName} (e.g. Clothing | ملابس) *</label>
+                <input 
+                  type="text" 
+                  required
+                  placeholder="e.g. Electricals | كهربائيات"
+                  value={newCatName}
+                  onChange={(e) => setNewCatName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsCategoryModalOpen(false)}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-4 py-2 rounded-xl transition cursor-pointer"
+                >
+                  {t.cancel}
+                </button>
+                <button
+                  type="submit"
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-5 py-2 rounded-xl shadow-md shadow-indigo-600/10 transition cursor-pointer"
+                >
+                  {t.save}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL 2.5: ADD QUICK WAREHOUSE FORM --- */}
+      {isWarehouseModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 flex items-center justify-center p-4 z-50 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200/80" dir={isRtl ? 'rtl' : 'ltr'}>
+            <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-[#1e293b] text-white">
+              <h3 className="font-bold text-sm tracking-tight">
+                {isRtl ? 'إضافة مستودع سريع 🏢' : 'Add Quick Warehouse 🏢'}
+              </h3>
+              <button onClick={() => setIsWarehouseModalOpen(false)} className="text-slate-300 hover:text-white transition">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveQuickWarehouse} className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-555 mb-1">{isRtl ? 'اسم المستودع / الفرع *' : 'Warehouse / Branch Name *'}</label>
+                <input 
+                  type="text" 
+                  required
+                  placeholder="e.g. Al-Ameen Store | مستودع الأمين"
+                  value={quickWhName}
+                  onChange={(e) => setQuickWhName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-555 mb-1">{isRtl ? 'العنوان / الموقع' : 'Location / Address'}</label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. King Fahd Road | طريق الملك فهد"
+                  value={quickWhLocation}
+                  onChange={(e) => setQuickWhLocation(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsWarehouseModalOpen(false)}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-4 py-2 rounded-xl transition cursor-pointer"
+                >
+                  {t.cancel}
+                </button>
+                <button
+                  type="submit"
+                  className="bg-cyan-650 hover:bg-cyan-750 text-white text-xs font-bold px-5 py-2 rounded-xl shadow-md transition cursor-pointer"
+                >
+                  {t.save}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL 3: BARCODE PRINTOUT DESIGN GENERATOR --- */}
+      {isBarcodeModalOpen && selectedProductForBarcode && (
+        <div className="fixed inset-0 bg-slate-955/60 flex items-center justify-center p-4 z-50 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200" dir={isRtl ? 'rtl' : 'ltr'}>
+            <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-[#1e293b] text-white no-print">
+              <h3 className="font-bold text-sm tracking-tight">
+                {t.printBarcode}
+              </h3>
+              <button onClick={() => setIsBarcodeModalOpen(false)} className="text-slate-300 hover:text-white transition">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 flex flex-col items-center justify-center text-center space-y-4 bg-white" id="barcode-printable-area">
+              {/* Product Info */}
+              <div>
+                <p className="text-xs text-slate-400 font-sans tracking-wide uppercase font-black">
+                  {translations[language].appTitle}
+                </p>
+                <h4 className="font-black text-slate-800 text-sm font-sans mt-1">{selectedProductForBarcode.name}</h4>
+                <p className="text-sm font-mono text-indigo-700 font-black mt-1">{currencySymbol}{selectedProductForBarcode.sellingPrice.toFixed(2)}</p>
+              </div>
+
+              {/* Barcode Mock Rendering Lines */}
+              <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50 flex flex-col items-center justify-center space-y-2 select-none w-full max-w-[240px]">
+                {/* Simulated Barcode lines */}
+                <div className="flex gap-0.5 justify-center h-14 w-full">
+                  <div className="w-1 bg-slate-900 h-full"></div>
+                  <div className="w-0.5 bg-slate-900 h-full"></div>
+                  <div className="w-1.5 bg-slate-900 h-full"></div>
+                  <div className="w-0.5 bg-transparent h-full"></div>
+                  <div className="w-1 bg-slate-900 h-full"></div>
+                  <div className="w-1 bg-transparent h-full"></div>
+                  <div className="w-0.5 bg-slate-900 h-full"></div>
+                  <div className="w-1.5 bg-slate-900 h-full"></div>
+                  <div className="w-1 bg-transparent h-full"></div>
+                  <div className="w-0.5 bg-slate-900 h-full"></div>
+                  <div className="w-1 bg-slate-900 h-full"></div>
+                  <div className="w-1 bg-transparent h-full"></div>
+                  <div className="w-2 bg-slate-900 h-full"></div>
+                  <div className="w-0.5 bg-slate-900 h-full"></div>
+                  <div className="w-1.5 bg-slate-900 h-full"></div>
+                  <div className="w-1 bg-transparent h-full"></div>
+                  <div className="w-0.5 bg-slate-900 h-full"></div>
+                  <div className="w-1 bg-slate-900 h-full"></div>
+                </div>
+                <p className="text-xs font-mono font-bold text-slate-700 tracking-widest">{selectedProductForBarcode.code}</p>
+              </div>
+
+              <div className="text-slate-500 text-[10px] font-semibold bg-slate-50 p-2.5 rounded-xl flex items-center gap-1.5">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0 text-indigo-500" />
+                <span>{language === 'ar' ? 'تصميم ملصق معياري جاهز للطباعة واللصق على الكرتون.' : 'Standard layout ready to print for cardboard sticking.'}</span>
+              </div>
+            </div>
+
+            {/* Print trigger footer */}
+            <div className="flex justify-end gap-2 p-4 border-t border-slate-100 bg-slate-50 no-print">
+              <button
+                onClick={() => setIsBarcodeModalOpen(false)}
+                className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-4 py-2.5 rounded-xl transition cursor-pointer"
+              >
+                {t.cancel}
+              </button>
+              <button
+                onClick={handlePrintBarcode}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow-md shadow-indigo-600/10 transition flex items-center gap-1 cursor-pointer"
+              >
+                <Printer className="w-4 h-4" />
+                {language === 'ar' ? 'طباعة الملصق' : 'Print Label'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL 4: DETAILED VIEW MODAL --- */}
+      {selectedProductForDetails && (
+        <div className="fixed inset-0 bg-slate-950/75 flex items-center justify-center p-4 z-50 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-xl overflow-hidden border border-slate-200 text-slate-800" dir={isRtl ? 'rtl' : 'ltr'}>
+            
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-900 text-white">
+              <div className="flex items-center gap-2">
+                <Eye className="w-5 h-5 text-indigo-400" />
+                <div className="text-right">
+                  <h3 className="font-bold text-sm tracking-tight">
+                    {isRtl ? 'تفاصيل المنتج الكاملة' : 'Full Product Details'}
+                  </h3>
+                  <p className="text-[10px] text-slate-400 font-mono">{selectedProductForDetails.id}</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setSelectedProductForDetails(null)} 
+                className="text-slate-400 hover:text-white transition p-1 rounded-lg hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body / Printable Content */}
+            <div className="p-6 space-y-6" id="product-detail-printable">
+              {/* Product Title Banner */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-150 flex justify-between items-start gap-4">
+                <div className="space-y-1">
+                  <span className="text-[9px] font-black text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md uppercase tracking-wider">
+                    {localizedName(categories.find(c => c.id === selectedProductForDetails.categoryId)?.name, selectedProductForDetails.categoryId || '')}
+                  </span>
+                  <h4 className="font-black text-slate-900 text-base mt-1.5">{selectedProductForDetails.name}</h4>
+                  {selectedProductForDetails.description && (
+                    <p className="text-xs text-slate-500 mt-1">{selectedProductForDetails.description}</p>
+                  )}
+                </div>
+                
+                {/* Visual SKU / Code Tag */}
+                <div className="text-right shrink-0">
+                  <span className="font-mono text-xs font-bold bg-slate-200 text-slate-800 px-2.5 py-1 rounded-lg border border-slate-300 block">
+                    {selectedProductForDetails.code}
+                  </span>
+                  <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mt-1">{isRtl ? 'رمز باركود' : 'Barcode SKU'}</p>
+                </div>
+              </div>
+
+              {/* Data Specifications Grid */}
+              <div className="grid grid-cols-2 gap-4 text-right">
+                {/* Stock on Hand */}
+                <div className="bg-slate-50/50 p-3 rounded-xl border border-slate-150">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{isRtl ? 'الكمية المتوفرة حالياً' : 'Stock On Hand'}</p>
+                  <p className="text-lg font-black font-mono text-slate-800 mt-1">{selectedProductForDetails.quantity}</p>
+                </div>
+
+                {/* Min Stock limit */}
+                <div className="bg-slate-50/50 p-3 rounded-xl border border-slate-150">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{isRtl ? 'حد إعادة الطلب' : 'Reorder Alert Limit'}</p>
+                  <p className="text-lg font-black font-mono text-slate-800 mt-1">{selectedProductForDetails.minQuantity}</p>
+                </div>
+
+                {/* Cost Price */}
+                <div className="bg-emerald-50/20 p-3 rounded-xl border border-emerald-100/70">
+                  <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">{isRtl ? 'تكلفة شراء الوحدة' : 'Unit Cost Price'}</p>
+                  <p className="text-lg font-black font-mono text-emerald-700 mt-1">{currencySymbol}{selectedProductForDetails.costPrice.toFixed(2)}</p>
+                </div>
+
+                {/* Selling Price */}
+                <div className="bg-indigo-50/20 p-3 rounded-xl border border-indigo-100/70">
+                  <p className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider">{isRtl ? 'سعر البيع للجمهور' : 'Retail Selling Price'}</p>
+                  <p className="text-lg font-black font-mono text-indigo-700 mt-1">{currencySymbol}{selectedProductForDetails.sellingPrice.toFixed(2)}</p>
+                </div>
+              </div>
+
+              {/* Other parameters */}
+              <div className="space-y-3.5 border-t border-slate-100 pt-5 text-xs font-semibold">
+                {/* Profit Margin estimation */}
+                <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-150">
+                  <span className="text-slate-500">{isRtl ? 'الهامش الربحي التقديري للوحدة' : 'Estimated Unit Profit'}</span>
+                  <span className="font-bold font-mono text-slate-800 bg-white px-2 py-0.5 rounded border border-slate-200">
+                    {currencySymbol}{(selectedProductForDetails.sellingPrice - selectedProductForDetails.costPrice).toFixed(2)} 
+                    <span className="text-xs text-emerald-600 ml-1.5">
+                      ({(((selectedProductForDetails.sellingPrice - selectedProductForDetails.costPrice) / (selectedProductForDetails.costPrice || 1)) * 100).toFixed(0)}%)
+                    </span>
+                  </span>
+                </div>
+
+                {/* Warehouse Name */}
+                <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+                  <span className="text-slate-400">{isRtl ? 'المستودع المرتبط' : 'Associated Warehouse'}</span>
+                  <span className="text-slate-850 font-extrabold bg-indigo-50 text-indigo-750 px-2 py-0.5 rounded-lg border border-indigo-150">
+                    {warehouses.find(w => w.id === selectedProductForDetails.warehouseId)?.name || (isRtl ? 'غير محدد' : 'Not Assigned')}
+                  </span>
+                </div>
+
+                {/* Warehouse Shelf Location */}
+                <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+                  <span className="text-slate-400">{isRtl ? 'موقع الرف بالمستودع' : 'Warehouse Location Shelf'}</span>
+                  <span className="text-slate-850 font-bold">{selectedProductForDetails.location || (isRtl ? 'غير محدد' : 'Not Assigned')}</span>
+                </div>
+
+                {/* Primary Supplier */}
+                <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+                  <span className="text-slate-400">{isRtl ? 'المورد الرئيسي المرتبط' : 'Linked Primary Supplier'}</span>
+                  <span className="text-slate-850 font-bold">
+                    {suppliers.find(s => s.id === selectedProductForDetails.supplierId)?.name || (isRtl ? 'غير مرتبط' : 'Not Linked')}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal actions footer: Edit, Delete, Share, Print */}
+            <div className="bg-slate-50 p-4 border-t border-slate-100 flex flex-wrap gap-2 justify-between">
+              <div className="flex gap-2">
+                {/* Share details */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const shareText = isRtl
+                      ? `تفاصيل المنتج:\nالأسم: ${selectedProductForDetails.name}\nالكود: ${selectedProductForDetails.code}\nالكمية: ${selectedProductForDetails.quantity}\nالسعر: ${currencySymbol}${selectedProductForDetails.sellingPrice}`
+                      : `Product Details:\nName: ${selectedProductForDetails.name}\nSKU: ${selectedProductForDetails.code}\nStock: ${selectedProductForDetails.quantity}\nPrice: ${currencySymbol}${selectedProductForDetails.sellingPrice}`;
+                    navigator.clipboard.writeText(shareText);
+                    if (showToast) {
+                      showToast(isRtl ? 'تم نسخ تفاصيل المنتج لمشاركتها!' : 'Product details copied to clipboard!', 'success');
+                    } else {
+                      alert(isRtl ? 'تم نسخ التفاصيل بنجاح!' : 'Copied successfully!');
+                    }
+                  }}
+                  className="bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold px-3 py-2 rounded-xl border border-slate-250 transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Share2 className="w-3.5 h-3.5 text-slate-500" />
+                  {isRtl ? 'مشاركة' : 'Share'}
+                </button>
+
+                {/* Print details */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const printContents = document.getElementById('product-detail-printable')?.innerHTML;
+                    if (printContents) {
+                      const htmlString = `
+                        <html>
+                          <head>
+                            <title>Product Print</title>
+                            <style>
+                              @page {
+                                size: A4 portrait;
+                                margin: 10mm;
+                              }
+                              body { 
+                                font-family: sans-serif; 
+                                padding: 20px; 
+                                color: #1e293b; 
+                                direction: ${isRtl ? 'rtl' : 'ltr'}; 
+                                background: #fff;
+                              }
+                              .font-mono { font-family: monospace; }
+                              .text-slate-400 { color: #94a3b8; }
+                              .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+                              .p-3 { padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 12px; }
+                              h4 { font-size: 24px; margin: 10px 0; }
+                              .border-t { border-top: 1px solid #e2e8f0; padding-top: 20px; }
+                              .flex { display: flex; justify-content: space-between; margin-bottom: 10px; }
+                              
+                              @media print {
+                                html, body {
+                                  margin: 0 !important;
+                                  padding: 0 !important;
+                                  height: auto !important;
+                                  background: #fff !important;
+                                }
+                                body {
+                                  padding: 10mm !important;
+                                }
+                              }
+                            </style>
+                          </head>
+                          <body>
+                            ${printContents}
+                          </body>
+                        </html>
+                      `;
+                      printHtml(htmlString, 'a4', isRtl ? 'بيانات المنتج / المخزون' : 'Product / Inventory Report');
+                    }
+                  }}
+                  className="bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold px-3 py-2 rounded-xl border border-slate-250 transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5 text-slate-500" />
+                  {isRtl ? 'طباعة' : 'Print'}
+                </button>
+              </div>
+
+              <div className="flex gap-2">
+                {/* Delete */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm(t.confirmDelete)) {
+                      onDeleteProduct(selectedProductForDetails.id);
+                      setSelectedProductForDetails(null);
+                    }
+                  }}
+                  className="bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold px-3.5 py-2 rounded-xl border border-rose-100 transition flex items-center gap-1 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  {isRtl ? 'حذف' : 'Delete'}
+                </button>
+
+                {/* Edit */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const p = selectedProductForDetails;
+                    setSelectedProductForDetails(null);
+                    openEditModal(p);
+                  }}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition flex items-center gap-1 cursor-pointer"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  {isRtl ? 'تعديل' : 'Edit'}
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

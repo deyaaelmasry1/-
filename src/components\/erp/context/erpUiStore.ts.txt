@@ -1,0 +1,28 @@
+import { useSyncExternalStore } from 'react';
+
+export type ErpDialog = null | { type: string; payload?: unknown };
+export interface ErpUiState {
+  activeInvoiceId?: string;
+  selectedCustomerId?: string;
+  selectedWarehouseId?: string;
+  selectedPartnerId?: string;
+  dialog: ErpDialog;
+  printJob?: { kind: string; payload: unknown };
+}
+
+let state: ErpUiState = { dialog: null };
+const listeners = new Set<() => void>();
+const emit = () => listeners.forEach((listener) => listener());
+
+export const erpUiStore = {
+  getSnapshot: () => state,
+  subscribe(listener: () => void) { listeners.add(listener); return () => listeners.delete(listener); },
+  patch(patch: Partial<ErpUiState>) { state = { ...state, ...patch }; emit(); },
+  openDialog(type: string, payload?: unknown) { state = { ...state, dialog: { type, payload } }; emit(); },
+  closeDialog() { state = { ...state, dialog: null }; emit(); },
+  reset() { state = { dialog: null }; emit(); },
+};
+
+export function useErpUiStore<T>(selector: (value: ErpUiState) => T): T {
+  return useSyncExternalStore(erpUiStore.subscribe, () => selector(erpUiStore.getSnapshot()), () => selector(erpUiStore.getSnapshot()));
+}

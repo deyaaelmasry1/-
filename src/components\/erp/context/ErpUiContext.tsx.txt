@@ -1,0 +1,9 @@
+import React, { createContext, useContext, useMemo } from 'react';
+import { erpUiStore } from './erpUiStore';
+
+const ErpUiContext = createContext(erpUiStore);
+export function ErpUiProvider({ children }: React.PropsWithChildren) {
+  const value = useMemo(() => erpUiStore, []);
+  return <ErpUiContext.Provider value={value}>{children}</ErpUiContext.Provider>;
+}
+export const useErpUiActions = () => useContext(ErpUiContext);
